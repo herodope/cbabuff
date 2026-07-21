@@ -206,7 +206,7 @@ end
 
 local window = CreateFrame("Frame", "CBABuffAlert", UIParent)
 window:SetSize(280, 20)
-window:SetBackdrop({
+CBAB:ApplyBackdrop(window, {
 	bgFile = "Interface\\Buttons\\WHITE8x8",
 	edgeFile = "Interface\\Buttons\\WHITE8x8",
 	edgeSize = 1,

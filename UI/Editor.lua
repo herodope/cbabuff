@@ -29,7 +29,7 @@ window:SetPoint("CENTER")
 window:SetMovable(true)
 window:EnableMouse(true)
 window:SetClampedToScreen(true)
-window:SetBackdrop({
+CBAB:ApplyBackdrop(window, {
 	bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
 	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 	edgeSize = 16,
@@ -61,7 +61,7 @@ local banner = CreateFrame("Frame", nil, window)
 banner:SetPoint("TOPLEFT", 12, -34)
 banner:SetPoint("TOPRIGHT", -12, -34)
 banner:SetHeight(40)
-banner:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
+CBAB:ApplyBackdrop(banner, { bgFile = "Interface\\Buttons\\WHITE8x8" })
 banner:SetBackdropColor(0.5, 0.35, 0, 0.85)
 banner:Hide()
 

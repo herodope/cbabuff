@@ -11,7 +11,7 @@ window:SetPoint("CENTER")
 window:SetMovable(true)
 window:EnableMouse(true)
 window:SetClampedToScreen(true)
-window:SetBackdrop({
+CBAB:ApplyBackdrop(window, {
 	bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
 	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 	edgeSize = 16,

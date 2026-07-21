@@ -105,7 +105,7 @@ for i = 1, 9 do
 	btn.icon:SetAllPoints()
 	btn.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-	btn:SetBackdrop({
+	CBAB:ApplyBackdrop(btn, {
 		edgeFile = "Interface\\Buttons\\WHITE8x8",
 		edgeSize = 2,
 	})
@@ -140,7 +140,7 @@ rfButton:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 rfButton.icon = rfButton:CreateTexture(nil, "ARTWORK")
 rfButton.icon:SetAllPoints()
 rfButton.icon:SetTexture(GetSpellTexture(25780)) -- Righteous Fury's own icon, not guessed
-rfButton:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
+CBAB:ApplyBackdrop(rfButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
 rfButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
 -- Righteous Fury (left) / Seal of the assigned type (right), both on self.
@@ -164,7 +164,7 @@ nextButton:RegisterForClicks("AnyDown")
 nextButton:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 nextButton.icon = nextButton:CreateTexture(nil, "ARTWORK")
 nextButton.icon:SetAllPoints()
-nextButton:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
+CBAB:ApplyBackdrop(nextButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
 nextButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
 -- ============================================================
@@ -452,7 +452,7 @@ local function getPopoutButton(index)
 		btn:SetSize(BUTTON_SIZE - 6, BUTTON_SIZE - 6)
 		btn.icon = btn:CreateTexture(nil, "ARTWORK")
 		btn.icon:SetAllPoints()
-		btn:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+		CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
 		popoutButtons[index] = btn
 	end
 	return btn

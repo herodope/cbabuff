@@ -61,6 +61,19 @@ function CBAB:After(delay, fn)
 	C_Timer.After(delay, fn)
 end
 
+-- Cross-client backdrop compatibility. Classic-era clients have
+-- SetBackdrop natively on every frame. Clients built on the newer
+-- (Legion+) frame API don't -- it only exists after mixing in
+-- BackdropTemplateMixin -- and TBC Anniversary's exact footing here isn't
+-- guaranteed. This works unmodified either way: if SetBackdrop is already
+-- there, the Mixin call is skipped entirely.
+function CBAB:ApplyBackdrop(frame, backdrop)
+	if BackdropTemplateMixin and not frame.SetBackdrop then
+		Mixin(frame, BackdropTemplateMixin)
+	end
+	frame:SetBackdrop(backdrop)
+end
+
 function CBAB:Print(...)
 	local n = select("#", ...)
 	local parts = {}
