@@ -1,5 +1,9 @@
 local ADDON, CBAB = ...
 
+-- Renamed to C_AddOns.GetAddOnMetadata on this client; the bare global no
+-- longer exists. This is line 3 of the whole addon, so getting it wrong
+-- takes down everything -- confirmed the hard way on first install.
+local GetAddOnMetadata = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
 CBAB.version = GetAddOnMetadata(ADDON, "Version") or "dev"
 
 -- The one and only event frame for the entire addon. No other module may
@@ -67,6 +71,31 @@ end
 -- BackdropTemplateMixin -- and TBC Anniversary's exact footing here isn't
 -- guaranteed. This works unmodified either way: if SetBackdrop is already
 -- there, the Mixin call is skipped entirely.
+-- GetSpellInfo/GetSpellTexture were split into C_Spell.GetSpellInfo
+-- (returns a table, not multiple values) plus C_Spell.GetSpellTexture on
+-- clients that received the same API modernization GetAddOnMetadata did.
+-- Given that confirmed rename, these two are now treated as equally
+-- suspect rather than assumed safe. Normalize both shapes to one return
+-- value so callers never need to know which client they're on.
+function CBAB:GetSpellName(spellId)
+	if C_Spell and C_Spell.GetSpellInfo then
+		local info = C_Spell.GetSpellInfo(spellId)
+		return info and info.name
+	end
+	return (GetSpellInfo(spellId))
+end
+
+function CBAB:GetSpellIcon(spellId)
+	if C_Spell and C_Spell.GetSpellTexture then
+		return C_Spell.GetSpellTexture(spellId)
+	end
+	if C_Spell and C_Spell.GetSpellInfo then
+		local info = C_Spell.GetSpellInfo(spellId)
+		return info and info.iconID
+	end
+	return GetSpellTexture(spellId)
+end
+
 function CBAB:ApplyBackdrop(frame, backdrop)
 	if BackdropTemplateMixin and not frame.SetBackdrop then
 		Mixin(frame, BackdropTemplateMixin)

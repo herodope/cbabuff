@@ -50,7 +50,7 @@ end)
 local function spellNameFor(blessingId, isGreater)
 	local blessing = CBAB.Blessings[blessingId]
 	local ids = isGreater and blessing.greaterIDs or blessing.normalIDs
-	return (GetSpellInfo(ids[1]))
+	return CBAB:GetSpellName(ids[1])
 end
 
 -- ============================================================
@@ -139,13 +139,13 @@ rfButton:RegisterForClicks("AnyDown")
 rfButton:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 rfButton.icon = rfButton:CreateTexture(nil, "ARTWORK")
 rfButton.icon:SetAllPoints()
-rfButton.icon:SetTexture(GetSpellTexture(25780)) -- Righteous Fury's own icon, not guessed
+rfButton.icon:SetTexture(CBAB:GetSpellIcon(25780)) -- Righteous Fury's own icon, not guessed
 CBAB:ApplyBackdrop(rfButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
 rfButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
 -- Righteous Fury (left) / Seal of the assigned type (right), both on self.
 setAttributeSafe(rfButton, "type1", "spell")
-setAttributeSafe(rfButton, "spell1", (GetSpellInfo(25780))) -- Righteous Fury
+setAttributeSafe(rfButton, "spell1", CBAB:GetSpellName(25780)) -- Righteous Fury
 setAttributeSafe(rfButton, "unit1", "player")
 setAttributeSafe(rfButton, "type2", "spell")
 setAttributeSafe(rfButton, "unit2", "player")
@@ -539,6 +539,11 @@ local function applySavedPosition()
 	bar:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or -180)
 	bar:SetScale(ui.scale or 1.0)
 end
+
+-- Renamed to C_AddOns.IsAddOnLoaded on some clients, same family as
+-- GetAddOnMetadata (Core.lua) -- resolved once, not just guarded, so this
+-- actually detects PallyPower rather than silently assuming it's absent.
+local IsAddOnLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
 
 local function checkPallyPowerCollision()
 	local isLoaded = IsAddOnLoaded and IsAddOnLoaded("PallyPower")

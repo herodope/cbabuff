@@ -32,7 +32,7 @@ end)
 local function spellNameFor(blessingId, isGreater)
 	local blessing = CBAB.Blessings[blessingId]
 	local ids = isGreater and blessing.greaterIDs or blessing.normalIDs
-	return (GetSpellInfo(ids[1]))
+	return CBAB:GetSpellName(ids[1])
 end
 
 -- ============================================================
