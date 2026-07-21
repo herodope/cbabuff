@@ -113,6 +113,12 @@ end
 
 CBAB:On("GROUP_ROSTER_UPDATE", "roster:rebuild", rebuild)
 CBAB:On("UNIT_PET", "roster:rebuild", rebuild)
+-- One rebuild at login so the cache (and everything that reads it -- the
+-- bar's class layout, the roster page's assignment preview) reflects at
+-- least the solo player immediately, without waiting for a group event
+-- that may never come while playing alone. groupUnits() falls back to
+-- {"player"} out of a group, so this is a real, populated rebuild.
+CBAB:On("PLAYER_ENTERING_WORLD", "roster:initial", rebuild)
 
 -- ============================================================
 -- Accessors

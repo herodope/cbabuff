@@ -44,6 +44,11 @@ local SECTION_GAP = 14
 local MAX_ROWS = 26 -- raid cap (25) + one blank row headroom
 local CONTENT_WIDTH = 600
 local SCROLLBAR_CLEARANCE = 46
+local DELETE_SIZE = 22 -- red X delete button, sits right after each name
+-- A UIDropDownMenuTemplate's visible text starts ~this far right of the
+-- frame's own left edge (the template's left-cap texture). Column headers
+-- for dropdown columns are offset by this so the label sits over the text.
+local DD_TEXT_INSET = 18
 
 -- ============================================================
 -- Small shared helpers
@@ -305,10 +310,10 @@ local paladinHeader = createSeparator(
 	paladinColor
 )
 local paladinColHeader = createColumnHeader({
-	{ text = "Name", x = 6, width = 120 },
-	{ text = "Tank", x = 140, width = 40 },
-	{ text = "Spec (optional)", x = 176, width = 90 },
-	{ text = "Assign", x = 270, width = 90 },
+	{ text = "Name", x = 6, width = 110 },
+	{ text = "Tank", x = 150, width = 34 },
+	{ text = "Spec (opt.)", x = 178, width = 62 },
+	{ text = "Assign", x = 242 + DD_TEXT_INSET, width = 90 },
 })
 
 -- Generic "shield" flavoring for the Tanks separator (spec: "prot warrior
@@ -320,14 +325,27 @@ local tankHeader = createSeparator(
 	"Tanks",
 	nil
 )
+-- Shared x for the tank row's dropdown frames, reused by the row builder
+-- below so headers and dropdowns can't drift apart.
+local TANK_CLASS_DD_X = 136
+local TANK_BUFF_DD_X = { 214, 278, 342, 406 }
 local tankColHeader = createColumnHeader({
-	{ text = "Name", x = 6, width = 110 },
-	{ text = "Class", x = 118, width = 70 },
-	{ text = "Buff 1", x = 196, width = 54 },
-	{ text = "Buff 2", x = 252, width = 54 },
-	{ text = "Buff 3", x = 308, width = 54 },
-	{ text = "Buff 4", x = 364, width = 54 },
+	{ text = "Name", x = 6, width = 100 },
+	{ text = "Class", x = TANK_CLASS_DD_X + DD_TEXT_INSET, width = 60 },
+	{ text = "Buff 1", x = TANK_BUFF_DD_X[1] + DD_TEXT_INSET, width = 50 },
+	{ text = "Buff 2", x = TANK_BUFF_DD_X[2] + DD_TEXT_INSET, width = 50 },
+	{ text = "Buff 3", x = TANK_BUFF_DD_X[3] + DD_TEXT_INSET, width = 50 },
+	{ text = "Buff 4", x = TANK_BUFF_DD_X[4] + DD_TEXT_INSET, width = 50 },
 })
+
+-- Assignments section (spec 11.1, folded in from the removed standalone
+-- editor). Blessing-flavored icon to set it apart from the class table.
+local assignHeader = createSeparator(
+	"Interface\\Icons\\Spell_Holy_GreaterBlessingofKings",
+	nil,
+	"Assignments",
+	nil
+)
 
 -- Generic separator style, no icon (spec: "use generic style").
 local classHeader = createSeparator(nil, nil, "Class Headcounts", nil)
@@ -343,32 +361,33 @@ local function createPaladinRow(index)
 	row:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
 
 	row.nameBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.nameBox:SetSize(120, 18)
+	row.nameBox:SetSize(110, 18)
 	row.nameBox:SetPoint("LEFT", 6, 0)
 	row.nameBox:SetAutoFocus(false)
 
+	-- Delete X sits right after the name (per request), and is bigger.
+	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+	row.deleteButton:SetSize(DELETE_SIZE, DELETE_SIZE)
+	row.deleteButton:SetPoint("LEFT", row.nameBox, "RIGHT", 2, 0)
+
 	row.tank = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
 	row.tank:SetSize(18, 18)
-	row.tank:SetPoint("LEFT", row.nameBox, "RIGHT", 14, 0)
+	row.tank:SetPoint("LEFT", 150, 0)
 
 	row.specBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.specBox:SetSize(60, 14)
-	row.specBox:SetPoint("LEFT", row.tank, "RIGHT", 14, 0)
+	row.specBox:SetSize(58, 14)
+	row.specBox:SetPoint("LEFT", 182, 0)
 	row.specBox:SetAutoFocus(false)
 	row.specBox:SetFontObject(GameFontDisableSmall)
 
 	row.assignDropdown = CreateFrame("Frame", "CBABuffRosterPalAssignDD" .. index, row, "UIDropDownMenuTemplate")
-	row.assignDropdown:SetPoint("LEFT", row.specBox, "RIGHT", 2, -2)
+	row.assignDropdown:SetPoint("LEFT", 242, 0)
 	UIDropDownMenu_SetWidth(row.assignDropdown, 90)
 
 	row.warningText = row:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
 	row.warningText:SetPoint("LEFT", row.assignDropdown, "RIGHT", 6, 2)
-	row.warningText:SetWidth(160)
+	row.warningText:SetWidth(170)
 	row.warningText:SetJustifyH("LEFT")
-
-	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
-	row.deleteButton:SetSize(16, 16)
-	row.deleteButton:SetPoint("RIGHT", 0, 0)
 
 	row.state = { assignOverride = nil }
 	return row
@@ -435,30 +454,29 @@ local function createTankRow(index)
 	row:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
 
 	row.nameBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.nameBox:SetSize(110, 18)
+	row.nameBox:SetSize(100, 18)
 	row.nameBox:SetPoint("LEFT", 6, 0)
 	row.nameBox:SetAutoFocus(false)
 
+	-- Delete X right after the name (per request), bigger.
+	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+	row.deleteButton:SetSize(DELETE_SIZE, DELETE_SIZE)
+	row.deleteButton:SetPoint("LEFT", row.nameBox, "RIGHT", 0, 0)
+
 	row.classDropdown = CreateFrame("Frame", "CBABuffRosterTankClassDD" .. index, row, "UIDropDownMenuTemplate")
-	row.classDropdown:SetPoint("LEFT", row.nameBox, "RIGHT", 4, -2)
-	UIDropDownMenu_SetWidth(row.classDropdown, 70)
+	-- Fixed x (shared with the header, above) instead of chaining relative
+	-- offsets, so headers and dropdowns stay aligned regardless of the
+	-- template's internal padding.
+	row.classDropdown:SetPoint("LEFT", TANK_CLASS_DD_X, 0)
+	UIDropDownMenu_SetWidth(row.classDropdown, 60)
 
 	row.buffDropdowns = {}
-	local anchor = row.classDropdown
 	for slot = 1, 4 do
 		local dd = CreateFrame("Frame", ("CBABuffRosterTankBuffDD%d_%d"):format(index, slot), row, "UIDropDownMenuTemplate")
-		-- UIDropDownMenuTemplate carries built-in left padding around its
-		-- text -- the -8 tightens the visual gap between adjacent small
-		-- dropdowns. May need a pixel tweak once seen in-game.
-		dd:SetPoint("LEFT", anchor, "RIGHT", slot == 1 and 6 or -8, 0)
+		dd:SetPoint("LEFT", TANK_BUFF_DD_X[slot], 0)
 		UIDropDownMenu_SetWidth(dd, 50)
 		row.buffDropdowns[slot] = dd
-		anchor = dd
 	end
-
-	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
-	row.deleteButton:SetSize(16, 16)
-	row.deleteButton:SetPoint("RIGHT", 0, 0)
 
 	row.state = { class = "WARRIOR", tankWantOverride = {} }
 	return row
@@ -587,6 +605,160 @@ end
 for _, class in ipairs(CBAB.ClassOrder) do
 	classRows[class] = createClassRow(class)
 end
+
+-- ============================================================
+-- Assignments section (folded in from the removed standalone editor,
+-- spec 11.1). Computes a PLANNED assignment from the profile roster --
+-- not from live raid data -- by running the real pure solver
+-- (Solver/Assign.lua) against the roster page's own inputs: each
+-- paladin's Assign column (override or the assumed default), the Tanks
+-- section's per-tank want-lists, and the Class Headcounts majority for
+-- Might vs Wisdom. This is what lets a leader see and commit a plan
+-- BEFORE the raid forms (spec 7). With no headcount and no live data the
+-- majority defaults to Might primary / Wisdom secondary.
+--
+-- The display is a live preview, recomputed every refresh. "Solve (plan)"
+-- commits that same preview to profile.assignment and fires
+-- ASSIGNMENT_CHANGED, which is what makes the paladin bar (and a
+-- subsequent Push) reflect it. `/cbab solve` remains the separate
+-- LIVE-data solve for when the raid is actually assembled.
+-- ============================================================
+
+local function buildPlannedAssignment(profile)
+	local paladins = {}
+	for _, r in ipairs(profile.roster) do
+		if r.class == "PALADIN" then
+			paladins[#paladins + 1] = r
+		end
+	end
+
+	local physical, caster = tallyPhysicalCaster(profile.wants.specCounts or {})
+	local primary = (caster > physical) and "wisdom" or "might"
+	local assumed = assumedSlotOrder(#paladins, primary)
+
+	-- Slots map blessing -> caster, which is exactly what Solver.Assign
+	-- reads (via findSlot). Building them straight from the Assign column
+	-- means the displayed plan matches the Paladins section above.
+	-- slotByName records each paladin's DESIGNATED role blessing so the
+	-- display can show e.g. "Greater Wisdom" for the wisdom carrier even in
+	-- a roster where no class currently wants Wisdom (all-paladin, no spec
+	-- data) -- otherwise the solver assigns that carrier nothing to cast and
+	-- the row would misleadingly read "no greater slot".
+	local slots, slotByName = {}, {}
+	for i, p in ipairs(paladins) do
+		local blessing = p.assignOverride or assumed[i]
+		if blessing then
+			slots[#slots + 1] = { blessing = blessing, caster = p.name }
+			slotByName[p.name] = blessing
+		end
+	end
+
+	local roster = {}
+	for _, r in ipairs(profile.roster) do
+		roster[#roster + 1] = {
+			name = r.name,
+			class = r.class,
+			spec = r.spec,
+			tank = r.tank,
+			tankWantOverride = r.tankWantOverride,
+		}
+	end
+
+	local assignment = CBAB.Solver.Assign(slots, roster, profile.wants)
+	local validation = CBAB.Solver.Validate(assignment, roster)
+	return assignment, validation, paladins, slotByName
+end
+
+-- Distinct greater blessing TYPES a paladin casts (in blessing order) plus
+-- the overrides they own. Kept separate so the caller can color them.
+-- `slotBlessing` seeds the set with the paladin's designated role even when
+-- the solver gave them no class to cast it on (see slotByName above).
+local function paladinAssignmentSummary(paladinName, assignment, slotBlessing)
+	local greaterSet = {}
+	if slotBlessing then
+		greaterSet[slotBlessing] = true
+	end
+	for _, blessing in pairs(assignment.greaters[paladinName] or {}) do
+		greaterSet[blessing] = true
+	end
+	local greaterParts = {}
+	for _, key in ipairs(CBAB.BlessingOrder) do
+		if greaterSet[key] then
+			greaterParts[#greaterParts + 1] = "Greater " .. blessingLabel(key)
+		end
+	end
+
+	local overrideParts = {}
+	for _, o in ipairs(assignment.overrides or {}) do
+		if o.caster == paladinName then
+			overrideParts[#overrideParts + 1] =
+				("%s->%s (%s)"):format(blessingLabel(o.blessing), o.target, o.reason)
+		end
+	end
+
+	return greaterParts, overrideParts
+end
+
+local assignSolveButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+assignSolveButton:SetSize(96, 22)
+assignSolveButton:SetText("Solve (plan)")
+
+local assignPushButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+assignPushButton:SetSize(100, 22)
+assignPushButton:SetText("Push to raid")
+
+local assignStatusText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+assignStatusText:SetJustifyH("LEFT")
+assignStatusText:SetWidth(CONTENT_WIDTH - 220)
+
+local assignRows = {}
+local function getAssignRow(i)
+	local fs = assignRows[i]
+	if not fs then
+		fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		fs:SetJustifyH("LEFT")
+		fs:SetWidth(CONTENT_WIDTH - 12)
+		fs:SetWordWrap(false)
+		assignRows[i] = fs
+	end
+	return fs
+end
+
+local validatorRows = {}
+local function getValidatorRow(i)
+	local fs = validatorRows[i]
+	if not fs then
+		fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		fs:SetJustifyH("LEFT")
+		fs:SetWidth(CONTENT_WIDTH - 12)
+		validatorRows[i] = fs
+	end
+	return fs
+end
+
+local function doSolvePlan()
+	local profile = CBAB.DB:Profile()
+	if not profile then
+		CBAB:Print("no active profile")
+		return
+	end
+	local assignment = buildPlannedAssignment(profile)
+	assignment.epoch = (profile.assignment and profile.assignment.epoch or 0) + 1
+	assignment.author = UnitName("player")
+	assignment.timestamp = time()
+	-- Not pushed yet (spec 8): Comm:PushAssignment marks it "pushed".
+	assignment.source = "local"
+	profile.assignment = assignment
+	profile.modified = time()
+	CBAB:Print(("solved plan for '%s' -- %d override(s). Push to raid when ready."):format(
+		profile.name, #assignment.overrides))
+	-- Fires the roster page's own refresh AND the paladin bar's, so both
+	-- reflect the just-committed plan (this is the pbar-wiring fix).
+	CBAB:Fire("ASSIGNMENT_CHANGED")
+end
+
+assignSolveButton:SetScript("OnClick", doSolvePlan)
+assignPushButton:SetScript("OnClick", function() CBAB.Comm:PushAssignment() end)
 
 -- ============================================================
 -- Commit: scans both growing sections' CURRENT widget state and merges
@@ -874,6 +1046,77 @@ refreshAll = function()
 
 	y = y - SECTION_GAP
 
+	-- Assignments -------------------------------------------------------
+	-- Live preview recomputed every refresh from the profile roster (not
+	-- live raid data) -- see buildPlannedAssignment's header.
+	local plannedAssignment, plannedValidation, plannedPaladins, plannedSlotByName = buildPlannedAssignment(profile)
+
+	assignHeader:ClearAllPoints()
+	assignHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+	y = y - HEADER_HEIGHT
+
+	assignSolveButton:ClearAllPoints()
+	assignSolveButton:SetPoint("TOPLEFT", content, "TOPLEFT", 6, y)
+	assignPushButton:ClearAllPoints()
+	assignPushButton:SetPoint("LEFT", assignSolveButton, "RIGHT", 8, 0)
+	assignStatusText:ClearAllPoints()
+	assignStatusText:SetPoint("LEFT", assignPushButton, "RIGHT", 12, 0)
+
+	local errorCount, warnCount = 0, 0
+	for _, f in ipairs(plannedValidation) do
+		if f.level == "error" then errorCount = errorCount + 1 else warnCount = warnCount + 1 end
+	end
+	assignStatusText:SetText(("%d override(s)  |  %d error(s), %d warn(s)"):format(
+		#plannedAssignment.overrides, errorCount, warnCount))
+	assignPushButton:SetEnabled(errorCount == 0)
+	y = y - 28
+
+	local palColorHex = paladinColor or "ffffffff"
+	if #plannedPaladins == 0 then
+		local fs = getAssignRow(1)
+		fs:ClearAllPoints()
+		fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
+		fs:SetText("|cff888888No paladins in the roster yet -- add some above.|r")
+		fs:Show()
+		y = y - ROW_HEIGHT
+		for i = 2, #assignRows do assignRows[i]:Hide() end
+	else
+		for i, p in ipairs(plannedPaladins) do
+			local fs = getAssignRow(i)
+			fs:ClearAllPoints()
+			fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
+
+			local greaterParts, overrideParts = paladinAssignmentSummary(p.name, plannedAssignment, plannedSlotByName[p.name])
+			local greaterText = #greaterParts > 0 and table.concat(greaterParts, ", ") or "no greater slot"
+			local line = ("|c%s%s|r:  %s"):format(palColorHex, p.name, greaterText)
+			if #overrideParts > 0 then
+				line = line .. "   |cffffcc00[" .. table.concat(overrideParts, ", ") .. "]|r"
+			end
+			fs:SetText(line)
+			fs:Show()
+			y = y - ROW_HEIGHT
+		end
+		for i = #plannedPaladins + 1, #assignRows do assignRows[i]:Hide() end
+	end
+
+	for i, f in ipairs(plannedValidation) do
+		local fs = getValidatorRow(i)
+		fs:ClearAllPoints()
+		fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
+		if f.level == "error" then
+			fs:SetText("|cffff4444[ERROR]|r " .. f.message)
+		else
+			fs:SetText("|cffffcc00[warn]|r " .. f.message)
+		end
+		fs:Show()
+		y = y - 14
+	end
+	for i = #plannedValidation + 1, #validatorRows do
+		validatorRows[i]:Hide()
+	end
+
+	y = y - SECTION_GAP
+
 	-- Class headcounts --------------------------------------------------
 	classHeader:ClearAllPoints()
 	classHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
@@ -914,3 +1157,6 @@ CBAB:On("ASSIGNMENT_CHANGED", "rosterpage:refresh", function() if window:IsShown
 CBAB:On("ROSTER_CHANGED", "rosterpage:refresh2", function() if window:IsShown() then refreshAll() end end)
 
 CBAB.SlashCommands.roster = function() CBAB.RosterPage:Toggle() end
+-- The standalone editor was folded into this page (spec 11.1); keep the old
+-- command working so muscle memory / macros don't silently break.
+CBAB.SlashCommands.editor = function() CBAB.RosterPage:Toggle() end

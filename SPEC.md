@@ -92,7 +92,7 @@ Two modes in v1, detected at login and re-evaluated on `GROUP_ROSTER_UPDATE`:
 
 | Mode | Who | Gets |
 |---|---|---|
-| `coordinator` | Leader or assist | Editor, roster page, solve, push, full alert window |
+| `coordinator` | Leader or assist | Roster page (assignment display, solve, push), full alert window |
 | `paladin` | Any paladin | Bar, own assignment, alerts for own assignments, receives push |
 
 A player can be both. Mode determines which UI loads and whether the client participates in
@@ -608,18 +608,21 @@ lose their splits.
 
 ## 11. User interface
 
-### 11.1 Assignment editor (leader)
+### 11.1 Assignment display and controls
 
-Layout: **classes as rows, paladins as columns**. Rationale: the questions a leader asks during
-setup are class-first ("do the mages have Kings?", "who is covering priests?"), which this
-answers by reading across one row. Classes with no decisions collapse, so a 9-row table usually
-renders as 5. Tank conflict markers sit on the class row where the conflict lives.
+Originally a standalone class-rows × paladin-columns editor window. That window was **removed**;
+its assignment display and Solve/Push controls now live in the **Assignments section of the
+roster page** (11.6), because the leader is already there building the roster and the two were
+awkward to keep in sync as separate windows. The roster page presents the plan **paladin-first**
+(one row per paladin showing that paladin's greater blessing(s) and, for the salv carrier, the
+overrides it owns) rather than the old class-first grid.
 
-Contains:
-- Capability line per paladin with provenance and age
-- `Solve` button — **manual only**, gated on `InCombatLockdown()`, greys with a reason in combat
+Contains, in the roster page's Assignments section:
+- `Solve (plan)` button — computes a planned assignment from the roster page's own inputs and
+  commits it to `profile.assignment`, firing ASSIGNMENT_CHANGED so the paladin bar reflects it.
+  `/cbab solve` remains the separate **live-data** solve for an assembled raid, and stays
+  manual-only and gated on `InCombatLockdown()`
 - `Push to raid` button, blocked by validator errors
-- Plan diff banner on invite (section 6.3)
 - Validator output inline
 - Override count displayed, so the cost of a plan is visible at a glance
 
@@ -709,25 +712,39 @@ page, each showing its current entries plus exactly one blank row to type a new
 one into -- never a fixed row count, and this supersedes the earlier "25 slots"
 fixed-row design:
 
-1. **Paladins** -- name, tank flag, optional and visually secondary spec hint
-   field, and an Assign column auto-filled from a planning-time preview (the
-   reference count table in 5.3, not the real solver -- it assumes Kings is
-   available once there are 2+ paladins, since actual capability isn't known
-   until a paladin's own client has scanned talents). Overridable per paladin;
-   a red warning line appears only when the override differs from the preview.
-2. **Tanks** -- name, class, and up to 4 PreferredBuff dropdowns auto-filled
-   from that class's want-list (5.5), overridable per tank.
-3. **Class headcounts** -- a manual, per-class-per-spec headcount table (small
+1. **Paladins** -- name, a delete-X sitting right after the name, tank flag,
+   optional and visually secondary spec hint field, and an Assign column
+   auto-filled from a planning-time preview (the reference count table in 5.3,
+   not the real solver -- it assumes Kings is available once there are 2+
+   paladins, since actual capability isn't known until a paladin's own client
+   has scanned talents). Overridable per paladin; a red warning line appears
+   only when the override differs from the preview.
+2. **Tanks** -- name, delete-X, class, and up to 4 PreferredBuff dropdowns
+   auto-filled from that class's want-list (5.5), overridable per tank.
+3. **Assignments** -- the assignment display and Solve/Push controls that used
+   to be the standalone editor (11.1), folded in here. It shows a PLANNED
+   assignment computed by running the real pure solver against the roster
+   page's own inputs (each paladin's Assign column, the Tanks section's
+   per-tank want-lists, the Class Headcounts majority), not live raid data --
+   so a leader sees the plan while building the roster. Each paladin row shows
+   its greater blessing(s) -- making explicit which paladin carries Greater
+   Might and which carries Greater Wisdom -- and the salv carrier additionally
+   shows the tank/pet/minority overrides it owns. With no headcount and no live
+   data the majority defaults to Might primary / Wisdom secondary. "Solve
+   (plan)" commits the preview to `profile.assignment` and fires
+   ASSIGNMENT_CHANGED (which updates the paladin bar); "Push to raid" is gated
+   by validator errors. Validator output renders beneath the rows.
+4. **Class headcounts** -- a manual, per-class-per-spec headcount table (small
    class icon, class-colored name, small numeric field per spec) feeding the
-   Might/Wisdom majority used by the Assign preview, ahead of getting real
-   numbers from live raid data or addon comms.
+   Might/Wisdom majority used by the Assign preview and the Assignments section,
+   ahead of getting real numbers from live raid data or addon comms.
 
 A character who is both a paladin and a tank is one underlying roster entry
 that simply appears as a row in both of the first two sections -- there is no
 duplicate storage. Profile switcher (name box, Switch/New/Rename/Delete
 buttons) plus a profile-select dropdown (replacing an earlier clickable
 button-per-profile list), and an export/import box, sit above and below the
-three sections respectively.
+sections respectively.
 
 ---
 
@@ -745,6 +762,7 @@ TOC order is dependency order. Nothing reads a module loaded after it.
 ```
 Core.lua
 Data/Spells.lua
+Data/ClassSpecs.lua
 Data/Defaults.lua
 DB.lua
 Capability.lua
@@ -754,14 +772,18 @@ Solver/Assign.lua
 Solver/Validate.lua
 Comm.lua
 Track.lua
+Solve.lua
 UI/Bar.lua
 UI/Alert.lua
-UI/Editor.lua
 UI/RosterPage.lua
 UI/Config.lua
 Sim.lua
 Debug.lua
 ```
+
+The standalone assignment editor (`UI/Editor.lua`) was removed; its assignment
+display and Solve/Push controls are folded into the roster page's Assignments
+section (11.1/11.6).
 
 ### Core.lua
 Single event frame and dispatcher, module registry, slash command router, version constant.
@@ -875,8 +897,8 @@ CBAB.Track:Missing() -> { {unit, blessing, assignedTo} }
 
 Owns the aura API shim. Emits `BUFF_STATE_CHANGED` at most once per flush.
 
-### UI/Bar.lua, UI/Alert.lua, UI/Editor.lua, UI/RosterPage.lua, UI/Config.lua
-See section 11.
+### UI/Bar.lua, UI/Alert.lua, UI/RosterPage.lua, UI/Config.lua
+See section 11. (The former `UI/Editor.lua` was removed -- 11.1 folded into the roster page.)
 
 ### Sim.lua
 
@@ -897,10 +919,10 @@ Log ring buffer, `/cbab dump`, `/cbab perf` counters, `/cbab epoch`.
 
 | Emitter | Message | Consumers |
 |---|---|---|
-| Roster | `ROSTER_CHANGED` | Editor, Track, Comm |
-| Capability | `CAPABILITY_CHANGED` | Comm, Editor, Bar, Alert |
-| Comm | `ASSIGNMENT_RECEIVED` | DB, Bar, Alert, Editor |
-| DB | `ASSIGNMENT_CHANGED` | Bar, Alert, Track, Editor |
+| Roster | `ROSTER_CHANGED` | RosterPage, Track, Comm |
+| Capability | `CAPABILITY_CHANGED` | Comm, Bar, Alert |
+| Comm | `ASSIGNMENT_RECEIVED` | DB, Bar, Alert, RosterPage |
+| DB | `ASSIGNMENT_CHANGED` | Bar, Alert, Track, RosterPage |
 | Track | `BUFF_STATE_CHANGED` | Bar, Alert |
 
 No module calls another module's internals. Only these messages and the public functions above.

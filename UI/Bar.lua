@@ -430,8 +430,10 @@ handle:SetScript("OnLeave", GameTooltip_Hide)
 -- movement reaches OnClick, so this doesn't conflict with dragging.
 handle:RegisterForClicks("LeftButtonUp")
 handle:SetScript("OnClick", function()
-	if CBAB.Editor then
-		CBAB.Editor:Toggle()
+	-- The standalone assignment editor was folded into the roster page
+	-- (spec 11.1/11.6), so this opens that instead.
+	if CBAB.RosterPage then
+		CBAB.RosterPage:Toggle()
 	end
 end)
 
@@ -790,10 +792,17 @@ local function applySavedPosition()
 	bar:ClearAllPoints()
 	bar:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or -180)
 	bar:SetScale(ui.scale or 1.0)
-	-- Runs immediately at ADDON_LOADED rather than waiting for the first
-	-- ROSTER_CHANGED, so the panel (title/Lock/Close chrome) is visible
-	-- right away even before any group event has populated class buttons.
-	layoutButtons()
+	-- Full refresh immediately at ADDON_LOADED rather than waiting for the
+	-- first ROSTER_CHANGED. Without this the 9 class buttons stayed in
+	-- their default file-scope SHOWN-but-empty state (nine blank squares,
+	-- no icon, no label), because refreshLayout -- which hides unpopulated
+	-- buttons and sets the class labels -- had never run. Roster.lua's
+	-- PLAYER_ENTERING_WORLD rebuild then fires a ROSTER_CHANGED right after
+	-- login to fill in the real classes.
+	refreshLayout()
+	refreshAssignment()
+	refreshVisualState()
+	refreshNextButton()
 	refreshChrome()
 	CBAB.Bar_SetShown(ui.shown ~= false)
 end

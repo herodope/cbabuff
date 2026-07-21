@@ -26,7 +26,6 @@ Track.lua
 Solve.lua
 UI/Bar.lua
 UI/Alert.lua
-UI/Editor.lua
 UI/RosterPage.lua
 UI/Config.lua
 Sim.lua

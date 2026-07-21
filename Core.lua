@@ -129,10 +129,22 @@ local mode = {
 	passive = false,
 }
 
+-- IsRaidOfficer() does NOT exist on this client (TBC Anniversary 2.5.6) --
+-- calling it errored every GROUP_ROSTER_UPDATE and left mode.coordinator
+-- unset (which in turn gated Push off). The assistant check is
+-- UnitIsGroupAssistant("player") here; both are probed defensively rather
+-- than assumed, since API availability has repeatedly not matched the
+-- legacy assumptions elsewhere in this addon (see Core.lua's top comment).
+local function isRaidAssistant()
+	if UnitIsGroupAssistant then return UnitIsGroupAssistant("player") end
+	if IsRaidOfficer then return IsRaidOfficer() end
+	return false
+end
+
 local function isCoordinator()
 	if not IsInGroup() then return false end
 	if UnitIsGroupLeader("player") then return true end
-	if IsInRaid() and IsRaidOfficer() then return true end
+	if IsInRaid() and isRaidAssistant() then return true end
 	return false
 end
 
@@ -189,11 +201,12 @@ local function SlashHandler(msg)
 	command = command:lower()
 
 	if command == "" then
-		-- Section 13: bare /cbab toggles the editor. Kept as a graceful
-		-- fallback (print version+mode) if UI/Editor.lua somehow isn't
-		-- loaded, rather than silently doing nothing.
-		if CBAB.Editor then
-			CBAB.Editor:Toggle()
+		-- Section 13: bare /cbab opens the roster page, which now hosts the
+		-- assignment display and Solve/Push that used to live in the
+		-- standalone editor (spec 11.1/11.6). Version+mode print is the
+		-- graceful fallback if the roster page somehow isn't loaded.
+		if CBAB.RosterPage then
+			CBAB.RosterPage:Toggle()
 		else
 			CBAB:Print(CBAB.L.VERSION_LINE:format(CBAB.version, modeLabel()))
 		end
