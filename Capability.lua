@@ -56,8 +56,18 @@ local function scanGroup(group)
 		end
 	end
 
+	-- Confirmed via /dump: GetTalentInfo's icon return is a numeric
+	-- FileDataID on this client, not the string path Data/Spells.lua
+	-- stores for display purposes (that string is still fine for
+	-- Texture:SetTexture, which accepts either -- this is specifically
+	-- about an EQUALITY comparison, where a number can never match a
+	-- string). Resolving each blessing's reference icon at runtime through
+	-- the same spell-icon lookup, rather than the hardcoded string,
+	-- guarantees both sides of the comparison are the same representation
+	-- this client actually uses, whichever one that is.
 	local function rankOf(blessingId)
-		local texture = CBAB.Blessings[blessingId].texture
+		local blessing = CBAB.Blessings[blessingId]
+		local texture = CBAB:GetSpellIcon(blessing.normalIDs[1])
 		return textureRank[texture] or 0
 	end
 
