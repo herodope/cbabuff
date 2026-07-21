@@ -29,11 +29,18 @@ than a crash — check those first and don't trust anything downstream of them u
 
 ## 3. Capability scanning — HIGH RISK, check this before trusting anything solver-related
 
-This is the single riskiest unverified piece in the addon. Spec 6.1 requires reading talent data
-for **both** dual-spec groups via a 5th argument to `GetTalentInfo`/`GetTalentTabInfo`; I
-corroborated the argument's existence against Wrath-era API docs but found no TBC Anniversary
-addon actually using it. If it's wrong, **nothing errors** — the extra argument is just ignored,
-and both groups silently read as whichever is currently active.
+This is the single riskiest unverified piece in the addon. Update: first-install testing already
+caught one real bug here and it's fixed — `GetTalentTabInfo` on this client returns
+`(id, name, "", icon, pointsSpent, background, ...)`, not the legacy `(name, icon, pointsSpent,
+...)` order the code was originally written against (confirmed via `/dump GetTalentTabInfo(1,
+false, false, 1)` against a live client). `GetTalentInfo`'s order checked out correct as written.
+
+What's still unverified: spec 6.1 requires reading talent data for **both** dual-spec groups via
+a 5th argument to `GetTalentInfo`/`GetTalentTabInfo`. The `/dump` tests so far only used group
+`1` — they confirmed the *return value order*, not that passing group `2` actually reads the
+*inactive* spec rather than silently re-reading the active one. If that argument doesn't do what
+spec 6.1 claims, **nothing errors** — it's just ignored, and both groups silently read identical
+data. This is the part of section 3 below that still needs a real dual-spec test.
 
 - On a paladin with dual spec set up differently in each group, run `/cbab dump talents`.
 - Confirm both groups show, with a `*` marking the currently active one.

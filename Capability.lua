@@ -37,7 +37,12 @@ local function scanGroup(group)
 	local bestTabName, bestPoints = nil, -1
 
 	for tab = 1, GetNumTalentTabs() do
-		local tabName, _, pointsSpent = GetTalentTabInfo(tab, false, false, group)
+		-- Confirmed via /dump against a live client: name is return value 2
+		-- here, not 1, and pointsSpent is value 5, not 3 -- this client's
+		-- GetTalentTabInfo returns (id, name, "", icon, pointsSpent,
+		-- background, ...), not the legacy (name, icon, pointsSpent, ...)
+		-- order this was originally written against.
+		local _, tabName, _, _, pointsSpent = GetTalentTabInfo(tab, false, false, group)
 		pointsSpent = pointsSpent or 0
 		if pointsSpent > bestPoints then
 			bestTabName, bestPoints = tabName, pointsSpent
