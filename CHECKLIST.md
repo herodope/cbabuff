@@ -43,21 +43,22 @@ caught two real bugs here and both are fixed —
    blessing's reference icon at runtime through the same spell-icon lookup, so both sides of the
    comparison use whatever representation this client actually returns.
 
-What's still unverified: spec 6.1 requires reading talent data for **both** dual-spec groups via
-a 5th argument to `GetTalentInfo`/`GetTalentTabInfo`. The `/dump` tests so far only used group
-`1` — they confirmed the *return value order*, not that passing group `2` actually reads the
-*inactive* spec rather than silently re-reading the active one. If that argument doesn't do what
-spec 6.1 claims, **nothing errors** — it's just ignored, and both groups silently read identical
-data. This is the part of section 3 below that still needs a real dual-spec test.
+**Update: the dual-spec group argument is now confirmed working**, tested live on a
+retribution/protection paladin (group 1 = retribution: `kings=true sanctuary=false`; group 2 =
+protection: `kings=true sanctuary=true`). Both groups kept their own distinct, correct values
+across a live spec swap — group 2 still read `sanctuary=true` even while retribution (group 1)
+was the active spec, which is exactly the signal that would have been wrong (both groups
+collapsing to whichever is active) if the 5th `group` argument were silently ignored. `*` also
+correctly followed the swap. This was the single highest-risk unverified assumption in the whole
+addon and it's now actually confirmed, not just hoped for.
 
-- On a paladin with dual spec set up differently in each group, run `/cbab dump talents`.
-- Confirm both groups show, with a `*` marking the currently active one.
-- Confirm the **inactive** group's `kings`/`sanctuary`/`impMight`/`impWisdom` values match that
-  spec, not your current one. This is the actual test — if both groups show identical numbers
-  regardless of which is active, the group argument isn't working.
-- Swap specs in-game (out of combat) and re-run `/cbab dump talents` — the `*` should follow,
-  and the numbers for what's now your active group should update within a couple seconds
-  (`SPELLS_CHANGED`/`ACTIVE_TALENT_GROUP_CHANGED` are debounced ~1.5s).
+`impMight`/`impWisdom` weren't independently confirmed (no invested points to test against at
+the time), but they run through the identical `rankOf()` code path Kings/Sanctuary just got fixed
+in and verified against — there's no reason to expect a different result, though a real
+confirmation once someone has points in either Improved talent would close this out fully.
+
+- Remaining: confirm `impMight`/`impWisdom` on a paladin who actually has points in either
+  Improved talent, in either dual-spec group.
 
 ## 4. Roster
 
