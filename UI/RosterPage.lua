@@ -3,20 +3,21 @@ local ADDON, CBAB = ...
 -- The roster page (spec 7, 11.6): 25 slots, name entry, tank flags, an
 -- optional plannedGroup pin, a profile switcher, and export/import.
 --
--- profile.roster is kept as a DENSE array (no nil holes) rather than 25
--- fixed independently-addressable slots. This matters beyond just this
+-- All 25 rows are always shown (matching spec's literal "25 slots"
+-- language, and avoiding the surprise of a row silently appearing after
+-- pressing Enter). Every field edit rebuilds profile.roster FROM SCRATCH
+-- by scanning all 25 rows' current widget state and keeping only the ones
+-- with a non-empty name, in visual order. This matters beyond just this
 -- file: several places in the codebase (e.g. Solve.lua's roster walk)
 -- iterate profile.roster with ipairs, which silently stops at the first
--- nil -- a sparse array with a gap in slot 3 would make every entry from
--- slot 4 onward invisible to the solver. Deleting a row removes it and
--- shifts everything after it up, so that can never happen. The 25 rows
--- shown are just "the array, plus one blank row to type a new entry into
--- at the end" -- not literally 25 fixed slots.
+-- nil -- rebuilding fresh from a full scan every time means there is no
+-- index-mapping logic that could ever leave a gap in the middle.
 --
 -- Class/spec are optional planning hints ONLY (spec 6, 7): live raid data
 -- always overrides them, the solver never reads spec except as a cosmetic
 -- tiebreak, and nobody should believe setting it configures anything. Both
--- fields are deliberately small and dim compared to name/tank.
+-- fields are deliberately small and dim compared to name/tank, and labelled
+-- as hints in the column header so that's not left to guesswork.
 
 CBAB.RosterPage = {}
 
@@ -28,7 +29,7 @@ local MAX_DISPLAY_ROWS = 25
 -- ============================================================
 
 local window = CreateFrame("Frame", "CBABuffRosterPage", UIParent)
-window:SetSize(520, 480)
+window:SetSize(560, 520)
 window:SetPoint("CENTER")
 window:SetMovable(true)
 window:EnableMouse(true)
@@ -53,11 +54,16 @@ window:RegisterForDrag("LeftButton")
 window:SetScript("OnDragStart", function() window:StartMoving() end)
 window:SetScript("OnDragStop", function() window:StopMovingOrSizing() end)
 
+local function refreshAll() end -- forward-declared, assigned near the bottom
+
 -- ============================================================
 -- Profile switcher. No UIDropDownMenu (avoids that template's boilerplate
 -- for a case this simple): a name box plus New/Rename/Delete/Switch
--- buttons acting on whatever's typed, and a clickable list of existing
--- profile names underneath for discoverability.
+-- buttons acting on whatever's typed, PLUS a clickable list of existing
+-- profiles -- clicking one switches to it immediately and loads its name
+-- into the box, so "which profile am I on" is never just a small text
+-- label you can miss, and "New" only ever fires against a name you
+-- deliberately typed over the current one.
 -- ============================================================
 
 local profileBar = CreateFrame("Frame", nil, window)
@@ -67,10 +73,12 @@ profileBar:SetHeight(22)
 
 local activeProfileText = profileBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 activeProfileText:SetPoint("LEFT", 0, 0)
+activeProfileText:SetWidth(150)
+activeProfileText:SetJustifyH("LEFT")
 
 local profileNameBox = CreateFrame("EditBox", nil, profileBar, "InputBoxTemplate")
 profileNameBox:SetSize(120, 20)
-profileNameBox:SetPoint("LEFT", 160, 0)
+profileNameBox:SetPoint("LEFT", 156, 0)
 profileNameBox:SetAutoFocus(false)
 
 local function profileButton(label, xOffset, onClick)
@@ -81,8 +89,6 @@ local function profileButton(label, xOffset, onClick)
 	btn:SetScript("OnClick", onClick)
 	return btn
 end
-
-local function refreshAll() end -- forward-declared, assigned below
 
 profileButton("Switch", 6, function()
 	local name = profileNameBox:GetText()
@@ -95,6 +101,7 @@ profileButton("New", 72, function()
 	local ok, err = CBAB.DB:CreateProfile(name)
 	if ok then
 		CBAB.DB:SetActiveProfile(name)
+		CBAB:Print(("created and switched to a new, empty profile '%s' -- your other profiles are untouched, switch back any time"):format(name))
 	else
 		CBAB:Print(err)
 	end
@@ -115,44 +122,100 @@ profileButton("Delete", 210, function()
 	refreshAll()
 end)
 
-local profileListText = profileBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-profileListText:SetPoint("TOPLEFT", 0, -22)
-profileListText:SetPoint("TOPRIGHT", 0, -22)
-profileListText:SetJustifyH("LEFT")
+-- Clickable profile list: one button per saved profile, reused across
+-- refreshes. Clicking switches to it AND loads its name into the box.
+local profileListButtons = {}
+
+local function getProfileListButton(index)
+	local btn = profileListButtons[index]
+	if not btn then
+		btn = CreateFrame("Button", nil, profileBar, "UIPanelButtonTemplate")
+		btn:SetHeight(18)
+		profileListButtons[index] = btn
+	end
+	return btn
+end
 
 -- ============================================================
--- Roster rows: name, class hint, spec hint, tank flag, plannedGroup,
--- delete.
+-- Column header (spec 11.6: class/spec are hints, visually secondary --
+-- labelled here so nobody has to guess what an unlabelled box is for).
 -- ============================================================
+
+local header = CreateFrame("Frame", nil, window)
+header:SetPoint("TOPLEFT", 12, -84)
+header:SetPoint("TOPRIGHT", -46, -84)
+header:SetHeight(14)
+
+local function headerLabel(text, anchorPoint, xOffset, width)
+	local fs = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	fs:SetPoint("LEFT", anchorPoint, xOffset, 0)
+	fs:SetWidth(width)
+	fs:SetJustifyH("LEFT")
+	fs:SetText(text)
+	return fs
+end
+
+local headerName = headerLabel("Name", header, 24, 140)
+local headerTank = headerLabel("Tank", headerName, 148, 30)
+local headerClass = headerLabel("Class (hint)", headerTank, 30, 70)
+local headerSpec = headerLabel("Spec (hint)", headerClass, 74, 70)
+local headerGroup = headerLabel("Grp", headerSpec, 74, 40)
+
+-- ============================================================
+-- Roster rows: name, tank flag, class hint, spec hint, plannedGroup,
+-- delete. Always all 25, never a dynamically-growing N+1.
+-- ============================================================
+
+-- Scrollbar clearance: this client has repeatedly not matched the legacy
+-- template assumptions the rest of this addon was written against, so
+-- rather than fine-tune an exact pixel offset for UIPanelScrollFrameTemplate's
+-- scrollbar, this reserves generous margin instead of a tight one.
+local SCROLLBAR_CLEARANCE = 46
 
 local scrollFrame = CreateFrame("ScrollFrame", "CBABuffRosterScroll", window, "UIPanelScrollFrameTemplate")
-scrollFrame:SetPoint("TOPLEFT", 12, -108)
-scrollFrame:SetPoint("BOTTOMRIGHT", -34, 96)
+scrollFrame:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -2)
+scrollFrame:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -SCROLLBAR_CLEARANCE, 130)
 
 local content = CreateFrame("Frame", nil, scrollFrame)
-content:SetSize(460, MAX_DISPLAY_ROWS * ROW_HEIGHT)
+content:SetSize(420, MAX_DISPLAY_ROWS * ROW_HEIGHT)
 scrollFrame:SetScrollChild(content)
 
 local rows = {}
 
-local function commitRoster()
-	-- Compact away any entry whose name is now empty, keeping the array
-	-- dense (see file header). Called after every field edit.
+-- Rebuilds profile.roster from scratch by scanning every row's CURRENT
+-- widget state, keeping only rows with a non-empty name, in visual order.
+-- Called after every field edit -- see file header for why this replaced
+-- the earlier per-index read/write approach.
+local function commitAllRows()
 	local profile = CBAB.DB:Profile()
 	if not profile then return end
-	local compact = {}
-	for _, r in ipairs(profile.roster) do
-		if r.name and r.name ~= "" then
-			compact[#compact + 1] = r
+
+	local newRoster = {}
+	for i = 1, MAX_DISPLAY_ROWS do
+		local row = rows[i]
+		if row then
+			local name = row.nameBox:GetText()
+			if name and name ~= "" then
+				local classText = row.classBox:GetText()
+				local specText = row.specBox:GetText()
+				local plannedNum = tonumber(row.plannedGroupBox:GetText())
+				newRoster[#newRoster + 1] = {
+					name = name,
+					tank = row.tank:GetChecked() and true or false,
+					class = classText ~= "" and classText:upper() or nil,
+					spec = specText ~= "" and specText:lower() or nil,
+					plannedGroup = (plannedNum == 1 or plannedNum == 2) and plannedNum or nil,
+				}
+			end
 		end
 	end
-	profile.roster = compact
+	profile.roster = newRoster
 	profile.modified = time()
 end
 
 local function createRow(index)
 	local row = CreateFrame("Frame", nil, content)
-	row:SetSize(460, ROW_HEIGHT)
+	row:SetSize(420, ROW_HEIGHT)
 	row:SetPoint("TOPLEFT", 0, -(index - 1) * ROW_HEIGHT)
 
 	row.indexText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -161,20 +224,17 @@ local function createRow(index)
 	row.indexText:SetText(tostring(index))
 
 	row.nameBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.nameBox:SetSize(140, 18)
+	row.nameBox:SetSize(130, 18)
 	row.nameBox:SetPoint("LEFT", 24, 0)
 	row.nameBox:SetAutoFocus(false)
 
 	row.tank = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
 	row.tank:SetSize(18, 18)
-	row.tank:SetPoint("LEFT", row.nameBox, "RIGHT", 8, 0)
+	row.tank:SetPoint("LEFT", row.nameBox, "RIGHT", 18, 0)
 
-	-- Class/spec hints: deliberately small, dim, secondary (spec 6/7/11.6)
-	-- -- these are planning hints only, never read by the solver as
-	-- anything but a cosmetic tiebreak, and always overridden by live data.
 	row.classBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	row.classBox:SetSize(70, 14)
-	row.classBox:SetPoint("LEFT", row.tank, "RIGHT", 8, 0)
+	row.classBox:SetPoint("LEFT", row.tank, "RIGHT", 20, 0)
 	row.classBox:SetAutoFocus(false)
 	row.classBox:SetFontObject(GameFontDisableSmall)
 
@@ -185,78 +245,41 @@ local function createRow(index)
 	row.specBox:SetFontObject(GameFontDisableSmall)
 
 	row.plannedGroupBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.plannedGroupBox:SetSize(20, 14)
-	row.plannedGroupBox:SetPoint("LEFT", row.specBox, "RIGHT", 6, 0)
+	row.plannedGroupBox:SetSize(24, 14)
+	row.plannedGroupBox:SetPoint("LEFT", row.specBox, "RIGHT", 10, 0)
 	row.plannedGroupBox:SetAutoFocus(false)
 	row.plannedGroupBox:SetNumeric(true)
 
-	local plannedLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	plannedLabel:SetPoint("LEFT", row.plannedGroupBox, "RIGHT", 2, 0)
-	plannedLabel:SetText("grp")
-
 	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
 	row.deleteButton:SetSize(16, 16)
-	row.deleteButton:SetPoint("LEFT", plannedLabel, "RIGHT", 4, 0)
+	row.deleteButton:SetPoint("LEFT", row.plannedGroupBox, "RIGHT", 6, 0)
 
 	return row
 end
 
-local function bindRow(row, index)
-	local function entry()
-		local profile = CBAB.DB:Profile()
-		return profile and profile.roster[index]
-	end
-
-	local function ensureEntry()
-		local profile = CBAB.DB:Profile()
-		if not profile then return nil end
-		profile.roster[index] = profile.roster[index] or { name = "" }
-		return profile.roster[index]
+local function bindRow(row)
+	local function commitAndRefresh()
+		commitAllRows()
+		refreshAll()
 	end
 
 	row.nameBox:SetScript("OnEnterPressed", function(self)
-		local e = ensureEntry()
-		if e then e.name = self:GetText() end
-		commitRoster()
-		refreshAll()
+		commitAndRefresh()
 		self:ClearFocus()
 	end)
-	row.nameBox:SetScript("OnEditFocusLost", function(self)
-		local e = ensureEntry()
-		if e then e.name = self:GetText() end
-		commitRoster()
-		refreshAll()
-	end)
-
-	row.classBox:SetScript("OnEditFocusLost", function(self)
-		local e = entry()
-		if e then e.class = self:GetText() ~= "" and self:GetText():upper() or nil end
-	end)
-	row.specBox:SetScript("OnEditFocusLost", function(self)
-		local e = entry()
-		if e then e.spec = self:GetText() ~= "" and self:GetText():lower() or nil end
-	end)
-	row.plannedGroupBox:SetScript("OnEditFocusLost", function(self)
-		local e = entry()
-		if e then
-			local n = tonumber(self:GetText())
-			e.plannedGroup = (n == 1 or n == 2) and n or nil
-			self:SetText(e.plannedGroup and tostring(e.plannedGroup) or "")
-		end
-	end)
-
-	row.tank:SetScript("OnClick", function(self)
-		local e = ensureEntry()
-		if e then e.tank = self:GetChecked() and true or false end
-	end)
+	row.nameBox:SetScript("OnEditFocusLost", commitAndRefresh)
+	row.classBox:SetScript("OnEditFocusLost", commitAndRefresh)
+	row.specBox:SetScript("OnEditFocusLost", commitAndRefresh)
+	row.plannedGroupBox:SetScript("OnEditFocusLost", commitAndRefresh)
+	row.tank:SetScript("OnClick", commitAndRefresh)
 
 	row.deleteButton:SetScript("OnClick", function()
-		local profile = CBAB.DB:Profile()
-		if profile and profile.roster[index] then
-			table.remove(profile.roster, index)
-			profile.modified = time()
-		end
-		refreshAll()
+		row.nameBox:SetText("")
+		row.classBox:SetText("")
+		row.specBox:SetText("")
+		row.plannedGroupBox:SetText("")
+		row.tank:SetChecked(false)
+		commitAndRefresh()
 	end)
 end
 
@@ -264,7 +287,7 @@ local function getRow(index)
 	local row = rows[index]
 	if not row then
 		row = createRow(index)
-		bindRow(row, index)
+		bindRow(row)
 		rows[index] = row
 	end
 	return row
@@ -276,8 +299,8 @@ end
 
 local ioScroll = CreateFrame("ScrollFrame", "CBABuffRosterIOScroll", window, "UIPanelScrollFrameTemplate")
 ioScroll:SetPoint("BOTTOMLEFT", 12, 44)
-ioScroll:SetPoint("BOTTOMRIGHT", -34, 44)
-ioScroll:SetHeight(48)
+ioScroll:SetPoint("BOTTOMRIGHT", -SCROLLBAR_CLEARANCE, 44)
+ioScroll:SetHeight(70)
 
 -- The EditBox's own height can exceed the scroll viewport -- WoW scrolls
 -- within it -- so a longer export (a full 25-man roster + assignment)
@@ -334,19 +357,44 @@ refreshAll = function()
 	local profile = CBAB.DB:Profile()
 	activeProfileText:SetText(profile and ("Active: " .. profile.name) or "No active profile")
 
+	-- Keep the name box tracking the active profile whenever it isn't
+	-- currently focused, so "New"/"Rename"/"Delete" act on the profile
+	-- you're actually looking at unless you've deliberately typed
+	-- something else over it.
+	if profile and not profileNameBox:HasFocus() then
+		profileNameBox:SetText(profile.name)
+	end
+
 	local names = {}
 	for name in pairs(CBAB.DB:Profiles()) do
 		names[#names + 1] = name
 	end
 	table.sort(names)
-	profileListText:SetText(#names > 0 and ("Profiles: " .. table.concat(names, ", ")) or "No profiles yet")
 
-	local rosterCount = profile and #profile.roster or 0
-	local displayCount = math.min(MAX_DISPLAY_ROWS, rosterCount + 1)
+	for i, name in ipairs(names) do
+		local btn = getProfileListButton(i)
+		btn:SetText(name == (profile and profile.name) and ("* " .. name) or name)
+		btn:SetWidth(math.max(70, btn:GetFontString():GetStringWidth() + 16))
+		btn:ClearAllPoints()
+		if i == 1 then
+			btn:SetPoint("TOPLEFT", profileBar, "TOPLEFT", 0, -22)
+		else
+			btn:SetPoint("LEFT", profileListButtons[i - 1], "RIGHT", 4, 0)
+		end
+		btn:SetScript("OnClick", function()
+			local ok, err = CBAB.DB:SetActiveProfile(name)
+			if not ok then CBAB:Print(err) end
+			profileNameBox:SetText(name)
+			refreshAll()
+		end)
+		btn:Show()
+	end
+	for i = #names + 1, #profileListButtons do
+		profileListButtons[i]:Hide()
+	end
 
-	for i = 1, displayCount do
+	for i = 1, MAX_DISPLAY_ROWS do
 		local row = getRow(i)
-		row:Show()
 		local e = profile and profile.roster[i]
 		if e then
 			row.nameBox:SetText(e.name or "")
@@ -354,21 +402,14 @@ refreshAll = function()
 			row.specBox:SetText(e.spec or "")
 			row.plannedGroupBox:SetText(e.plannedGroup and tostring(e.plannedGroup) or "")
 			row.tank:SetChecked(e.tank and true or false)
-			row.deleteButton:Show()
 		else
 			row.nameBox:SetText("")
 			row.classBox:SetText("")
 			row.specBox:SetText("")
 			row.plannedGroupBox:SetText("")
 			row.tank:SetChecked(false)
-			row.deleteButton:Hide()
 		end
 	end
-	for i = displayCount + 1, #rows do
-		rows[i]:Hide()
-	end
-
-	content:SetHeight(math.max(1, displayCount) * ROW_HEIGHT)
 end
 
 function CBAB.RosterPage:Toggle()
