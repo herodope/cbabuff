@@ -14,6 +14,11 @@ CBAB.Defaults.wants = {
 		WARRIOR = { "kings", "might", "light", "sanctuary" },
 	},
 	pet = { "might", "kings", "light" },
+	-- Manual class/spec headcounts entered on the roster page (spec 11.6),
+	-- keyed CLASS -> specKey -> integer count. Purely informational input
+	-- feeding the Might/Wisdom majority preview on that same page ahead of
+	-- getting real numbers from live raid data or addon comms.
+	specCounts = {},
 }
 
 -- Shape of a fresh `CBABuffDB` (account-wide).

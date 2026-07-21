@@ -6,7 +6,9 @@ local ADDON, CBAB = ...
 --
 -- roster: array of raid members (spec 5, not the raw DB roster table):
 --   { name, class, spec, tank = bool, isPet = bool, owner = "HunterName",
---     unit = "raidpet3" }
+--     unit = "raidpet3", tankWantOverride = {...} }
+--   tankWantOverride is an optional per-tank want-list from the roster page
+--   (spec 11.6) that takes priority over wants.tanks[class] for that member.
 --   Paladin entries may additionally carry capability fields mirroring what
 --   was passed to BuildSlots -- kings, sanctuary, impMight, impWisdom,
 --   activeGroup, plannedGroup -- since Assign (and Validate) need to know
@@ -215,7 +217,9 @@ function CBAB.Solver.Assign(slots, roster, wants)
 
 	for _, member in ipairs(roster) do
 		if member.tank and not member.isPet then
-			walkWantList(member, wants.tanks and wants.tanks[member.class], "tank")
+			-- A per-tank want-list set on the roster page (spec 11.6) overrides
+			-- the class-wide default; falls back to the class list when unset.
+			walkWantList(member, member.tankWantOverride or (wants.tanks and wants.tanks[member.class]), "tank")
 		end
 	end
 

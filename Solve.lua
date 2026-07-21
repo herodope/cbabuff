@@ -77,6 +77,7 @@ local function buildSolverRoster(profileByName)
 		if hint then
 			entry.spec = hint.spec
 			entry.plannedGroup = hint.plannedGroup
+			entry.tankWantOverride = hint.tankWantOverride
 		end
 
 		if m.class == "PALADIN" and not m.isPet then

@@ -13,6 +13,7 @@ locale/enUS.lua
 
 Core.lua
 Data/Spells.lua
+Data/ClassSpecs.lua
 Data/Defaults.lua
 DB.lua
 Capability.lua

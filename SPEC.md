@@ -234,7 +234,12 @@ feral tank     kings > might > light
 prot warrior   kings > might > light > sanctuary
 ```
 
-Want-lists are stored per profile and are editable. There is no per-tank dropdown.
+Want-lists are stored per profile and are editable per class as a default. The
+roster page's Tanks section (11.6) additionally offers a per-tank override of
+up to 4 preferred-buff dropdowns, which take priority over the class default
+for that one tank when set. This supersedes the original "no per-tank
+dropdown" restriction: per-character overrides turned out to be worth the
+added surface once the roster page grew a dedicated Tanks section.
 
 Worked example — 3 paladins, prot warrior tank:
 - Kings carrier casts greater Kings on warriors → `kings` filled
@@ -681,8 +686,30 @@ changing it alters the plan everyone receives.
 
 ### 11.6 Roster page
 
-25 slots, name entry, tank flags, optional and visually secondary spec hint field, profile
-switcher, export/import box.
+Not a fixed slot count. Three N+1 auto-growing sections stacked in one scrollable
+page, each showing its current entries plus exactly one blank row to type a new
+one into -- never a fixed row count, and this supersedes the earlier "25 slots"
+fixed-row design:
+
+1. **Paladins** -- name, tank flag, optional and visually secondary spec hint
+   field, and an Assign column auto-filled from a planning-time preview (the
+   reference count table in 5.3, not the real solver -- it assumes Kings is
+   available once there are 2+ paladins, since actual capability isn't known
+   until a paladin's own client has scanned talents). Overridable per paladin;
+   a red warning line appears only when the override differs from the preview.
+2. **Tanks** -- name, class, and up to 4 PreferredBuff dropdowns auto-filled
+   from that class's want-list (5.5), overridable per tank.
+3. **Class headcounts** -- a manual, per-class-per-spec headcount table (small
+   class icon, class-colored name, small numeric field per spec) feeding the
+   Might/Wisdom majority used by the Assign preview, ahead of getting real
+   numbers from live raid data or addon comms.
+
+A character who is both a paladin and a tank is one underlying roster entry
+that simply appears as a row in both of the first two sections -- there is no
+duplicate storage. Profile switcher (name box, Switch/New/Rename/Delete
+buttons) plus a profile-select dropdown (replacing an earlier clickable
+button-per-profile list), and an export/import box, sit above and below the
+three sections respectively.
 
 ---
 
