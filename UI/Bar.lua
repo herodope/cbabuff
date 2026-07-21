@@ -879,6 +879,10 @@ CBAB.SlashCommands.pbar = function()
 	if debugMode then
 		debugRoster = buildDebugRoster()
 		debugAssignment = buildDebugAssignment()
+		-- The whole point of pbar is to SEE the bar -- so un-hide it if it
+		-- was closed (ui.bar.shown=false), otherwise the command appears to
+		-- do nothing.
+		CBAB.Bar_SetShown(true)
 		CBAB:Print("pbar debug mode |cff00ff00ON|r -- bar now shows a synthetic roster/assignment. "
 			.. "Only your own class's button targets a real unit; every other button targets a fake "
 			.. "one and won't actually cast. Run |cff3399ff/cbab pbar|r again to turn it off.")

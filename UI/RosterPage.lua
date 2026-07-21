@@ -655,13 +655,20 @@ local function buildPlannedAssignment(profile)
 
 	local roster = {}
 	for _, r in ipairs(profile.roster) do
-		roster[#roster + 1] = {
-			name = r.name,
-			class = r.class,
-			spec = r.spec,
-			tank = r.tank,
-			tankWantOverride = r.tankWantOverride,
-		}
+		-- Skip entries missing a name or class. Solver.Assign indexes
+		-- members[m.class] and errors on a nil class -- and legacy profiles
+		-- (edited under older roster-page versions, before Paladins/Tanks
+		-- were the only entry points) can hold class-less cruft. commitAll
+		-- now drops these on the next edit; this guards the read side too.
+		if r.name and r.name ~= "" and r.class then
+			roster[#roster + 1] = {
+				name = r.name,
+				class = r.class,
+				spec = r.spec,
+				tank = r.tank,
+				tankWantOverride = r.tankWantOverride,
+			}
+		end
 	end
 
 	local assignment = CBAB.Solver.Assign(slots, roster, profile.wants)
@@ -839,11 +846,14 @@ commitAll = function()
 		end
 	end
 
-	-- Defensive only: preserves any entry neither section touched this
-	-- pass. Shouldn't occur in practice -- every roster entry is a
-	-- paladin, a tank, or both -- but a silent drop would be worse.
+	-- Preserve any WELL-FORMED entry neither section touched this pass.
+	-- In practice every entry is a paladin, a tank, or both, so this rarely
+	-- fires -- but it deliberately DROPS entries with no name or no class:
+	-- legacy profiles (from older roster-page versions) can hold class-less
+	-- cruft that has no home in the current UI and crashes the solver
+	-- (Assign.lua indexes members[class]). Editing the roster once purges it.
 	for _, r in ipairs(profile.roster) do
-		if not seen[r.name] then
+		if r.name and r.name ~= "" and r.class and not seen[r.name] then
 			newRoster[#newRoster + 1] = r
 			seen[r.name] = true
 		end
