@@ -88,12 +88,19 @@ local scrollFrame = CreateFrame("ScrollFrame", "CBABuffDebugLogScroll", window, 
 scrollFrame:SetPoint("TOPLEFT", 12, -36)
 scrollFrame:SetPoint("BOTTOMRIGHT", -34, 40)
 
-local logText = scrollFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+-- SetScrollChild requires an actual Frame, not a Region/FontString directly
+-- -- a FontString has to live inside a plain container frame, which is
+-- what actually gets handed to the scroll frame.
+local content = CreateFrame("Frame", nil, scrollFrame)
+content:SetSize(440, 1)
+scrollFrame:SetScrollChild(content)
+
+local logText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 logText:SetFontObject(ChatFontSmall)
+logText:SetPoint("TOPLEFT")
 logText:SetJustifyH("LEFT")
 logText:SetJustifyV("TOP")
 logText:SetWidth(440)
-scrollFrame:SetScrollChild(logText)
 
 function CBAB.Debug:RefreshWindow()
 	if #logBuffer == 0 then
@@ -101,7 +108,9 @@ function CBAB.Debug:RefreshWindow()
 	else
 		logText:SetText(table.concat(logBuffer, "\n"))
 	end
-	logText:SetHeight(logText:GetStringHeight())
+	local height = math.max(1, logText:GetStringHeight())
+	logText:SetHeight(height)
+	content:SetHeight(height)
 	scrollFrame:UpdateScrollChildRect()
 	scrollFrame:SetVerticalScroll(scrollFrame:GetVerticalScrollRange() or 0)
 end
