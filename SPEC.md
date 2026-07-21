@@ -639,11 +639,23 @@ PallyPower's click semantics, so existing raid macros keep working:
 - Pop-out player buttons for single-target casts
 - Class buttons blocked in combat; player buttons allowed
 - Secure action button attributes may only be set out of combat — guard with `InCombatLockdown()`
-- Visual: icon plus timer, class name on hover rather than always-on, coloured **border** for
-  state (missing / expiring / good) rather than a filled background
+- Visual: icon plus timer, class name **always visible** underneath each button (supersedes the
+  original hover-only choice), coloured **border** for state (missing / expiring / good) rather
+  than a filled background
 - Shift-click forces a refresh even when the duration guard would block it
 - A "cast next needed" button picks the single highest-value missing blessing
 - The paladin's own summary ("here is your job") is a **tooltip on the drag handle**, not a page
+
+The bar is a real window, not loose floating buttons: a backdrop panel with a title row (drag
+handle + tooltip, "CBA Buff" title text, Lock/Unlock, Close) and a resize grip in the bottom-right
+corner that adjusts the same scale value as the Config page's "Scale (%)" field. The panel lays
+out and sizes itself immediately at `ADDON_LOADED`, not only after the first live roster event, so
+its chrome is visible even before any group exists. None of this touches secure attributes --
+sizing, backdrop, and label text are always safe to change regardless of combat.
+
+Visibility is a persisted per-character setting (`ui.bar.shown`, default true). The title row's
+Close button, `/cbab bar`, and a "Show bar" checkbox on the Config page (11.5) all toggle it, so
+closing the bar always has two ways back.
 
 Because the button names collide with PallyPower, detect both addons being loaded and show a
 one-time popup: both use the same button names, macros will be unpredictable, disable one.
@@ -909,6 +921,7 @@ No module calls another module's internals. Only these messages and the public f
 /cbab sim <fixture>        run solver against a fixture, no group required
 /cbab sim all              run all fixtures, report pass/fail diffs
 /cbab pbar                 toggle the paladin bar's synthetic-roster debug mode, no group required
+/cbab bar                  toggle paladin bar visibility (also a "Show bar" checkbox in Config)
 /cbab perf                 aura event counters and flush timings
 /cbab epoch                show assignment epoch across the raid
 ```

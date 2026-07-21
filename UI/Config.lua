@@ -112,8 +112,13 @@ nextY = nextY - 8
 -- ============================================================
 
 sectionHeader("Paladin bar")
-checkbox("Locked (disable dragging)", function() return CBAB.DB:Char().ui.bar.locked end,
-	function(v) CBAB.DB:Char().ui.bar.locked = v end)
+checkbox("Show bar", function() return CBAB.DB:Char().ui.bar.shown ~= false end,
+	function(v) CBAB.Bar_SetShown(v) end)
+checkbox("Locked (disable dragging and resizing)", function() return CBAB.DB:Char().ui.bar.locked end,
+	function(v)
+		CBAB.DB:Char().ui.bar.locked = v
+		if CBAB.Bar_RefreshChrome then CBAB.Bar_RefreshChrome() end
+	end)
 checkbox("Compact", function() return CBAB.DB:Char().ui.bar.compact end,
 	function(v) CBAB.DB:Char().ui.bar.compact = v end)
 numberField("Scale (%)", function() return math.floor(CBAB.DB:Char().ui.bar.scale * 100) end,

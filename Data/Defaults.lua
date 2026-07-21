@@ -34,7 +34,7 @@ CBAB.Defaults.db = {
 CBAB.Defaults.char = {
 	schemaVersion = 1,
 	ui = {
-		bar = { point = "CENTER", x = 0, y = -180, scale = 1.0, locked = false, compact = true },
+		bar = { point = "CENTER", x = 0, y = -180, scale = 1.0, locked = false, compact = true, shown = true },
 		alert = { point = "CENTER", x = 0, y = 200, scale = 1.0, autoHide = true, hideInCombat = true },
 	},
 	warnings = { enabled = true, threshold = 120, sound = true, screenText = true, whisper = false },

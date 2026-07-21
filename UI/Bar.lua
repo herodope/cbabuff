@@ -53,6 +53,17 @@ local function spellNameFor(blessingId, isGreater)
 	return CBAB:GetSpellName(ids[1])
 end
 
+-- Class-colored, title-cased label for the persistent under-button text
+-- (spec 11.2, amended -- see the class button loop below).
+local function classDisplayLabel(class)
+	local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+	local displayName = class:sub(1, 1) .. class:sub(2):lower()
+	if color and color.colorStr then
+		return "|c" .. color.colorStr .. displayName .. "|r"
+	end
+	return displayName
+end
+
 -- ============================================================
 -- /cbab pbar debug mode: lets the bar be laid out, populated, and clicked
 -- on before a live group exists, since Roster.lua's cache is otherwise
@@ -179,17 +190,129 @@ end
 -- Frame creation. RegisterForClicks("AnyDown") is required for the
 -- `/click X LeftButton Down` macro form the task's own examples use --
 -- secure buttons don't respond to simulated Down clicks otherwise.
+--
+-- The bar is a real window now, not loose floating buttons: a backdrop
+-- panel, a title row (drag handle, title text, Lock/Unlock, Close), a
+-- persistent class-name label under every button (amends SPEC.md 11.2's
+-- original hover-only choice), and a resize grip. None of this touches
+-- secure attributes -- sizing/backdrop/label text are always safe to
+-- change regardless of combat, only SetAttribute needs the combat guard.
 -- ============================================================
 
 -- Classic/TBC frames can call SetBackdrop() directly without a
 -- BackdropTemplate (that requirement is Legion+/retail only).
 local bar = CreateFrame("Frame", "CBABuffBar", UIParent)
-bar:SetSize(300, 40)
 bar:SetMovable(true)
+bar:SetResizable(false) -- resizing goes through the custom grip + SetScale, not native frame resize
 bar:SetClampedToScreen(true)
+CBAB:ApplyBackdrop(bar, {
+	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+	edgeSize = 12,
+	insets = { left = 3, right = 3, top = 3, bottom = 3 },
+})
+bar:SetBackdropColor(0, 0, 0, 0.75)
 
+local PADDING = 8
+local TITLE_HEIGHT = 18
+local LABEL_HEIGHT = 12
+local ROW_GAP = 2
 local BUTTON_SIZE = 26
 local BUTTON_GAP = 4
+local TITLE_MIN_WIDTH = 170
+local RESIZE_GRIP_SIZE = 14
+
+-- ============================================================
+-- Title row: drag handle + tooltip (spec 11.2's "summary lives in a
+-- tooltip, not a page"), title text, Lock/Unlock, Close.
+-- ============================================================
+
+local titleBar = CreateFrame("Frame", nil, bar)
+titleBar:SetPoint("TOPLEFT", PADDING, -PADDING)
+titleBar:SetHeight(TITLE_HEIGHT)
+titleBar:EnableMouse(true)
+
+local titleText = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+titleText:SetPoint("LEFT", 14, 0)
+titleText:SetText("CBA Buff")
+
+local closeButton = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
+closeButton:SetSize(16, 16)
+closeButton:SetPoint("RIGHT", 0, 0)
+closeButton:SetScript("OnClick", function() CBAB.Bar_SetShown(false) end)
+
+local lockButton = CreateFrame("Button", nil, titleBar, "UIPanelButtonTemplate")
+lockButton:SetSize(44, 16)
+lockButton:SetPoint("RIGHT", closeButton, "LEFT", -4, 0)
+
+local function refreshChrome()
+	local locked = CBAB.DB:Char().ui.bar.locked
+	lockButton:SetText(locked and "Unlock" or "Lock")
+end
+CBAB.Bar_RefreshChrome = refreshChrome
+
+lockButton:SetScript("OnClick", function()
+	local charDB = CBAB.DB:Char()
+	charDB.ui.bar.locked = not charDB.ui.bar.locked
+	refreshChrome()
+end)
+
+-- The handle sliver keeps its original tooltip/click-to-open-editor
+-- behaviour (below); the rest of the title row is ALSO draggable, since a
+-- real title bar is draggable across its whole span, not just one sliver.
+local handle = CreateFrame("Button", nil, titleBar)
+handle:SetSize(10, TITLE_HEIGHT)
+handle:SetPoint("LEFT", 0, 0)
+handle.tex = handle:CreateTexture(nil, "ARTWORK")
+handle.tex:SetAllPoints()
+handle.tex:SetColorTexture(0.5, 0.5, 0.5, 0.6)
+
+local function startDrag()
+	if CBAB.DB:Char().ui.bar.locked then return end
+	bar:StartMoving()
+end
+local function stopDrag()
+	bar:StopMovingOrSizing()
+	local charDB = CBAB.DB:Char()
+	local point, _, _, x, y = bar:GetPoint(1)
+	charDB.ui.bar.point = point
+	charDB.ui.bar.x = x
+	charDB.ui.bar.y = y
+end
+
+titleBar:RegisterForDrag("LeftButton")
+titleBar:SetScript("OnDragStart", startDrag)
+titleBar:SetScript("OnDragStop", stopDrag)
+
+-- ============================================================
+-- Resize grip: drag to change the bar's own scale (same value the
+-- Config page's "Scale (%)" field edits, spec 11.5).
+-- ============================================================
+
+local resizeGrip = CreateFrame("Button", nil, bar)
+resizeGrip:SetSize(RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE)
+resizeGrip:SetPoint("BOTTOMRIGHT", -2, 2)
+resizeGrip.tex = resizeGrip:CreateTexture(nil, "OVERLAY")
+resizeGrip.tex:SetAllPoints()
+resizeGrip.tex:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+
+resizeGrip:SetScript("OnMouseDown", function(self)
+	if CBAB.DB:Char().ui.bar.locked then return end
+	self.dragging = true
+	self.startX = select(1, GetCursorPosition())
+	self.startScale = bar:GetScale()
+end)
+resizeGrip:SetScript("OnMouseUp", function(self)
+	self.dragging = false
+	CBAB.DB:Char().ui.bar.scale = bar:GetScale()
+end)
+resizeGrip:SetScript("OnUpdate", function(self)
+	if not self.dragging then return end
+	local x = select(1, GetCursorPosition())
+	local dx = (x - self.startX) / UIParent:GetEffectiveScale()
+	local newScale = math.max(0.5, math.min(2.0, self.startScale + dx / 200))
+	bar:SetScale(newScale)
+end)
 
 local classButtons = {}
 for i = 1, 9 do
@@ -214,16 +337,14 @@ for i = 1, 9 do
 	btn.cooldown:SetAllPoints()
 	btn.cooldown:SetHideCountdownNumbers(false)
 
+	-- Always visible now, not hover-only (amends SPEC.md 11.2).
 	btn.classLabel = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	btn.classLabel:SetPoint("BOTTOM", btn, "TOP", 0, 2)
-	btn.classLabel:Hide()
+	btn.classLabel:SetPoint("BOTTOM", btn, "TOP", 0, 1)
 
 	btn:SetScript("OnEnter", function(self)
-		self.classLabel:Show()
 		CBAB.Bar_ShowPopout(self)
 	end)
 	btn:SetScript("OnLeave", function(self)
-		self.classLabel:Hide()
 		CBAB.Bar_ScheduleHidePopout(self)
 	end)
 
@@ -264,15 +385,10 @@ CBAB:ApplyBackdrop(nextButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edge
 nextButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
 -- ============================================================
--- Drag handle: the paladin's own summary lives here as a tooltip, not a
--- separate page (spec 11.2).
+-- Handle tooltip: the paladin's own summary lives here, not a separate
+-- page (spec 11.2). The handle frame itself was created earlier as part
+-- of the title row.
 -- ============================================================
-
-local handle = CreateFrame("Button", nil, bar)
-handle:SetSize(12, BUTTON_SIZE)
-handle.tex = handle:CreateTexture(nil, "ARTWORK")
-handle.tex:SetAllPoints()
-handle.tex:SetColorTexture(0.5, 0.5, 0.5, 0.6)
 
 handle:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -305,20 +421,8 @@ handle:SetScript("OnEnter", function(self)
 end)
 handle:SetScript("OnLeave", GameTooltip_Hide)
 
-handle:RegisterForDrag("LeftButton")
-handle:SetScript("OnDragStart", function()
-	local charDB = CBAB.DB:Char()
-	if charDB.ui.bar.locked then return end
-	bar:StartMoving()
-end)
-handle:SetScript("OnDragStop", function()
-	bar:StopMovingOrSizing()
-	local charDB = CBAB.DB:Char()
-	local point, _, _, x, y = bar:GetPoint(1)
-	charDB.ui.bar.point = point
-	charDB.ui.bar.x = x
-	charDB.ui.bar.y = y
-end)
+-- Dragging is handled by titleBar (above, spanning the whole title row);
+-- the handle keeps only its tooltip and click-to-open-editor behaviour.
 
 -- A plain left click (no drag) opens the editor -- the non-chat entry
 -- point the editor's acceptance test wants (spec 11.1). A press-then-move
@@ -332,16 +436,20 @@ handle:SetScript("OnClick", function()
 end)
 
 -- ============================================================
--- Layout
+-- Layout: button row sits below the title row; the whole panel is
+-- resized to fit however many class buttons are actually shown (spec
+-- 11.2's compaction), with a minimum width so the title row's chrome
+-- (title/Lock/Close) never gets clipped by a short button row.
 -- ============================================================
 
-local function layoutButtons()
-	handle:ClearAllPoints()
-	handle:SetPoint("LEFT", bar, "LEFT", 0, 0)
+local buttonRowAnchor = CreateFrame("Frame", nil, bar)
+buttonRowAnchor:SetSize(1, 1)
+buttonRowAnchor:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, -(ROW_GAP + LABEL_HEIGHT))
 
-	local anchor = handle
-	local relPoint = "RIGHT"
-	local offset = 4
+local function layoutButtons()
+	local anchor = buttonRowAnchor
+	local relPoint = "LEFT"
+	local offset = 0
 
 	for i = 1, 9 do
 		local btn = classButtons[i]
@@ -358,6 +466,30 @@ local function layoutButtons()
 
 	nextButton:ClearAllPoints()
 	nextButton:SetPoint("LEFT", anchor, relPoint, offset, 0)
+
+	-- Content width = however far the button row actually extends, past
+	-- buttonRowAnchor's left edge.
+	local buttonRowWidth = (nextButton:GetRight() or 0) - (buttonRowAnchor:GetLeft() or 0)
+	if buttonRowWidth <= 0 then
+		-- GetRight()/GetLeft() aren't reliable before the first layout
+		-- pass has actually rendered a frame; fall back to a plain sum.
+		buttonRowWidth = BUTTON_SIZE + BUTTON_GAP + BUTTON_SIZE + BUTTON_GAP + BUTTON_SIZE
+		for i = 1, 9 do
+			if classButtons[i]:IsShown() then
+				buttonRowWidth = buttonRowWidth + BUTTON_SIZE + BUTTON_GAP
+			end
+		end
+	end
+
+	local contentWidth = math.max(buttonRowWidth, TITLE_MIN_WIDTH)
+	titleBar:ClearAllPoints()
+	titleBar:SetPoint("TOPLEFT", PADDING, -PADDING)
+	titleBar:SetWidth(contentWidth)
+
+	bar:SetSize(
+		contentWidth + PADDING * 2,
+		PADDING + TITLE_HEIGHT + ROW_GAP + LABEL_HEIGHT + BUTTON_SIZE + PADDING
+	)
 end
 
 -- ============================================================
@@ -377,6 +509,10 @@ local function refreshLayout()
 		if class then
 			btn:Show()
 			btn.class = class
+			-- classLabel's text was previously never actually set anywhere
+			-- (a pre-existing gap -- the hover label always rendered blank).
+			-- Now persistent, it needs setting here every layout pass.
+			btn.classLabel:SetText(classDisplayLabel(class))
 			-- Icon is set by refreshVisualState below, based on whatever
 			-- blessing ends up assigned to this class (or cleared if none).
 			-- Attributes are (re)built by refreshAssignment, which always
@@ -384,6 +520,7 @@ local function refreshLayout()
 		else
 			btn:Hide()
 			btn.class = nil
+			btn.classLabel:SetText("")
 		end
 	end
 
@@ -628,6 +765,22 @@ function CBAB.Bar_ScheduleHidePopout()
 end
 
 -- ============================================================
+-- Show/hide: the Close button on the title row sets this, /cbab bar and
+-- Config's "Show bar" checkbox both toggle it too (per session request,
+-- both a slash command AND a Config checkbox get you back if you close
+-- it). Older SavedVariables predate this field, so nil reads as shown.
+-- ============================================================
+
+function CBAB.Bar_SetShown(shown)
+	CBAB.DB:Char().ui.bar.shown = shown
+	if shown then
+		bar:Show()
+	else
+		bar:Hide()
+	end
+end
+
+-- ============================================================
 -- Position / lock / compact from CBABuffCharDB.ui.bar, and PallyPower
 -- collision warning (spec 11.2). Both wait for DB:Init() via ADDON_LOADED.
 -- ============================================================
@@ -637,6 +790,12 @@ local function applySavedPosition()
 	bar:ClearAllPoints()
 	bar:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or -180)
 	bar:SetScale(ui.scale or 1.0)
+	-- Runs immediately at ADDON_LOADED rather than waiting for the first
+	-- ROSTER_CHANGED, so the panel (title/Lock/Close chrome) is visible
+	-- right away even before any group event has populated class buttons.
+	layoutButtons()
+	refreshChrome()
+	CBAB.Bar_SetShown(ui.shown ~= false)
 end
 
 -- Renamed to C_AddOns.IsAddOnLoaded on some clients, same family as
@@ -722,4 +881,16 @@ CBAB.SlashCommands.pbar = function()
 	refreshAssignment()
 	refreshVisualState()
 	refreshNextButton()
+end
+
+-- ============================================================
+-- /cbab bar: toggles bar visibility -- the other half of the Close
+-- button's escape hatch, alongside Config's "Show bar" checkbox.
+-- ============================================================
+
+CBAB.SlashCommands.bar = function()
+	local shown = CBAB.DB:Char().ui.bar.shown ~= false
+	CBAB.Bar_SetShown(not shown)
+	CBAB:Print(shown and "paladin bar hidden -- /cbab bar or Config's \"Show bar\" brings it back"
+		or "paladin bar shown")
 end
