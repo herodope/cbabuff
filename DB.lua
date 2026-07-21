@@ -91,14 +91,25 @@ function CBAB.DB:Char()
 end
 
 function CBAB.DB:Cache()
+	if not CBABuffDB then return {} end
 	return CBABuffDB.capabilityCache
 end
 
+-- CBABuffDB is nil until ADDON_LOADED fires and CBAB.DB:Init() runs, which
+-- happens only after every file in the TOC (including this one and every
+-- UI file) has already executed once. UIDropDownMenu_Initialize calls its
+-- init function immediately during that first execution pass -- not only
+-- later when the menu opens -- so anything wired to a dropdown built at
+-- file scope (e.g. UI/RosterPage.lua's profile dropdown) can call these
+-- accessors before CBABuffDB exists. Guard rather than assume Init() has
+-- already run.
 function CBAB.DB:Profile()
+	if not CBABuffDB then return nil end
 	return CBABuffDB.profiles[CBABuffDB.activeProfile]
 end
 
 function CBAB.DB:Profiles()
+	if not CBABuffDB then return {} end
 	return CBABuffDB.profiles
 end
 
