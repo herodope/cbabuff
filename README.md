@@ -117,7 +117,8 @@ Three independent layers, all in the config page:
 
 ## Contributing / building
 
-Libraries (`LibStub`, `LibSerialize`, `LibDeflate`) are pulled in by the packager per
-`.pkgmeta` and are never committed — clone the repo and run the
-[BigWigs packager](https://github.com/BigWigsMods/packager) locally to get a loadable copy, or
-just push a tag and let `.github/workflows/release.yml` build one for you.
+Libraries (`LibStub`, `LibSerialize`, `LibDeflate`) are vendored directly under `Libs/` so a
+plain `git clone` is a loadable copy on its own — no packager step required for local testing.
+`.pkgmeta` still declares them as externals too, so a tagged release (`.github/workflows/release.yml`,
+via the [BigWigs packager](https://github.com/BigWigsMods/packager)) always ships whatever the
+latest upstream version of each library is, even if the committed copies under `Libs/` go stale.

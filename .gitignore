@@ -1,1 +1,3 @@
-Libs/
+# Libs/ used to be excluded here and left to the BigWigs packager to fill
+# in at release time. It's now committed directly instead, so a plain
+# `git clone` loads without needing to run the packager first.

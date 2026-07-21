@@ -7,15 +7,6 @@ load at all" up to the riskiest, least-verified pieces. Items marked **HIGH RISK
 could not verify an assumption and a failure there is silent (no error, just wrong data) rather
 than a crash — check those first and don't trust anything downstream of them until they pass.
 
-## 0. Before you do anything else
-
-The `Libs/` folder is gitignored and populated by the BigWigs packager, not committed. If
-you're testing from a plain `git clone` rather than a packaged release zip, **the addon will
-error on load** with "Cannot find a library instance of LibSerialize/LibDeflate" — you need to
-either run the packager locally or drop `LibStub`, `LibSerialize`, and `LibDeflate` into `Libs/`
-by hand first. Testing an actual packaged zip (see §10) sidesteps this entirely and is the more
-realistic test anyway.
-
 ## 1. Does it load
 
 - `/reload` with only CBA Buff enabled. Check for Lua errors (enable Lua error display via
