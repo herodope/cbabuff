@@ -649,6 +649,12 @@ Because the button names collide with PallyPower, detect both addons being loade
 one-time popup: both use the same button names, macros will be unpredictable, disable one.
 Do not import PallyPower's SavedVariables.
 
+`/cbab pbar` toggles a debug mode that substitutes a synthetic multi-class/tank roster and
+assignment for CBAB.Roster/CBAB.DB's live data, so the bar's layout, icons, and click-through can
+be exercised before a live group exists. Only the player's own class button targets the real
+`player` unit and can actually cast; every other button targets a fake unit token by design.
+Buff-state coloring (Track.lua) is not faked -- every button reads as "missing" in this mode.
+
 ### 11.3 Alert window
 
 Auto-hiding. No background when empty. Appears only when something is wrong. Rows are grouped
@@ -902,6 +908,7 @@ No module calls another module's internals. Only these messages and the public f
 /cbab dump roster|assign|comm|talents|cache
 /cbab sim <fixture>        run solver against a fixture, no group required
 /cbab sim all              run all fixtures, report pass/fail diffs
+/cbab pbar                 toggle the paladin bar's synthetic-roster debug mode, no group required
 /cbab perf                 aura event counters and flush timings
 /cbab epoch                show assignment epoch across the raid
 ```

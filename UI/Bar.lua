@@ -54,11 +54,107 @@ local function spellNameFor(blessingId, isGreater)
 end
 
 -- ============================================================
+-- /cbab pbar debug mode: lets the bar be laid out, populated, and clicked
+-- on before a live group exists, since Roster.lua's cache is otherwise
+-- only ever built from real grouped units on GROUP_ROSTER_UPDATE/UNIT_PET.
+-- A synthetic roster/assignment stands in for CBAB.Roster/CBAB.DB while
+-- active; every read in this file goes through the getX() wrappers below
+-- rather than calling CBAB.Roster/CBAB.DB/CBAB.Track directly, so toggling
+-- debugMode is the only thing that needs to change anywhere.
+--
+-- Real casts still only work for the player's OWN class button, since
+-- that one targets the real "player" unit -- every other button targets a
+-- fake unit token that resolves to nothing, by design (this is a layout/
+-- assignment-display test, not a way to cast on people who aren't there).
+-- Buff-state coloring (Track.lua) isn't faked: every button reads as
+-- "missing" (red border), which is still a real, useful signal that the
+-- icon/layout/click-through work, just not a buff-timer simulation.
+-- ============================================================
+
+local debugMode = false
+local debugRoster, debugAssignment
+
+local function buildDebugRoster()
+	local _, myClass = UnitClass("player")
+	local roster = {
+		player = { name = UnitName("player"), class = myClass, unit = "player", isTank = false, isPet = false },
+	}
+	local n = 0
+	for _, class in ipairs(CLASS_PRIORITY) do
+		if class ~= myClass then
+			n = n + 1
+			local unit = "cbabDebugFake" .. n
+			roster[unit] = {
+				name = "Debug" .. class:sub(1, 1) .. class:sub(2):lower(),
+				class = class,
+				unit = unit,
+				-- One fake tank so the tank-override path is visible too.
+				isTank = (class == "WARRIOR"),
+				isPet = false,
+			}
+		end
+	end
+	return roster
+end
+
+local function buildDebugAssignment()
+	local myName = UnitName("player")
+	local greaters = { [myName] = {} }
+	local n = 0
+	for _, class in ipairs(CLASS_PRIORITY) do
+		n = n + 1
+		greaters[myName][class] = CBAB.BlessingOrder[((n - 1) % #CBAB.BlessingOrder) + 1]
+	end
+	return {
+		epoch = 0,
+		author = myName,
+		timestamp = time(),
+		greaters = greaters,
+		overrides = { { caster = myName, target = "DebugWarrior", blessing = "light", reason = "tank" } },
+	}
+end
+
+local function getRosterCache()
+	if debugMode then return debugRoster end
+	return CBAB.Roster:Get()
+end
+
+local function getClassCounts()
+	if debugMode then
+		local counts = {}
+		for _, m in pairs(debugRoster) do
+			if not m.isPet then
+				counts[m.class] = (counts[m.class] or 0) + 1
+			end
+		end
+		return counts
+	end
+	return CBAB.Roster:ClassCounts()
+end
+
+local function getAssignment()
+	if debugMode then return debugAssignment end
+	local profile = CBAB.DB:Profile()
+	return profile and profile.assignment
+end
+
+-- No real buff timers to fake meaningfully -- see file header.
+local function getTrackStateFor(unit)
+	if debugMode then return {} end
+	return CBAB.Track:StateFor(unit)
+end
+
+local function getTrackMissing()
+	if debugMode then return {} end
+	return CBAB.Track:Missing()
+end
+
+-- ============================================================
 -- Class -> button-index compaction (spec 11.2).
 -- ============================================================
 
 local function computeClassLayout()
-	local counts = CBAB.Roster:ClassCounts()
+	local counts = getClassCounts()
 	local layout = {} -- [buttonIndex] = classToken
 	local cbNum = 0
 	for _, class in ipairs(CLASS_PRIORITY) do
@@ -71,7 +167,7 @@ local function computeClassLayout()
 end
 
 local function representativeUnit(class)
-	for unit, m in pairs(CBAB.Roster:Get()) do
+	for unit, m in pairs(getRosterCache()) do
 		if not m.isPet and m.class == class then
 			return unit, m
 		end
@@ -182,18 +278,21 @@ handle:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 	GameTooltip:SetText("CBA Buff", 1, 1, 1)
 
-	local profile = CBAB.DB:Profile()
+	local assignment = getAssignment()
 	local myName = UnitName("player")
 	local jobs = {}
-	if profile and profile.assignment then
-		for class, blessing in pairs(profile.assignment.greaters[myName] or {}) do
+	if assignment then
+		for class, blessing in pairs(assignment.greaters[myName] or {}) do
 			jobs[#jobs + 1] = ("Greater %s -> %s"):format(CBAB.Blessings[blessing].name, class)
 		end
-		for _, o in ipairs(profile.assignment.overrides or {}) do
+		for _, o in ipairs(assignment.overrides or {}) do
 			if o.caster == myName then
 				jobs[#jobs + 1] = ("%s -> %s (%s)"):format(CBAB.Blessings[o.blessing].name, o.target, o.reason)
 			end
 		end
+	end
+	if debugMode then
+		GameTooltip:AddLine("|cffff8800pbar debug mode|r", 1, 0.6, 0)
 	end
 	if #jobs == 0 then
 		GameTooltip:AddLine("No assignments.", 0.7, 0.7, 0.7)
@@ -299,10 +398,10 @@ end
 -- ============================================================
 
 local function classGreaterBlessing(class)
-	local profile = CBAB.DB:Profile()
-	if not profile or not profile.assignment then return nil end
+	local assignment = getAssignment()
+	if not assignment then return nil end
 	local myName = UnitName("player")
-	local entries = profile.assignment.greaters[myName]
+	local entries = assignment.greaters[myName]
 	return entries and entries[class]
 end
 
@@ -360,7 +459,7 @@ local function refreshVisualState()
 			local blessing = btn.assignedBlessing
 			if blessing then
 				btn.icon:SetTexture(CBAB.Blessings[blessing].texture)
-				local unitState = unit and CBAB.Track:StateFor(unit)
+				local unitState = unit and getTrackStateFor(unit)
 				local record = unitState and unitState[blessing]
 				if not record then
 					btn:SetBackdropBorderColor(unpack(MISSING_COLOR))
@@ -396,7 +495,7 @@ local VALUE_ORDER = { salv = 1, kings = 2, light = 3, might = 4, wisdom = 5, san
 local function refreshNextButton()
 	local myName = UnitName("player")
 	local best
-	for _, m in ipairs(CBAB.Track:Missing()) do
+	for _, m in ipairs(getTrackMissing()) do
 		if m.assignedTo == myName then
 			if not best or (VALUE_ORDER[m.blessing] or 99) < (VALUE_ORDER[best.blessing] or 99) then
 				best = m
@@ -462,9 +561,9 @@ function CBAB.Bar_ShowPopout(classButton)
 	if not classButton.class then return end
 
 	local myName = UnitName("player")
-	local profile = CBAB.DB:Profile()
+	local assignment = getAssignment()
 	local members = {}
-	for unit, m in pairs(CBAB.Roster:Get()) do
+	for unit, m in pairs(getRosterCache()) do
 		if not m.isPet and m.class == classButton.class then
 			members[#members + 1] = { unit = unit, name = m.name }
 		end
@@ -480,8 +579,8 @@ function CBAB.Bar_ShowPopout(classButton)
 		-- Casts whatever blessing THIS paladin currently owes this specific
 		-- person, if anything (tank/pet override, minority patch, etc.).
 		local blessing
-		if profile and profile.assignment then
-			for _, o in ipairs(profile.assignment.overrides or {}) do
+		if assignment then
+			for _, o in ipairs(assignment.overrides or {}) do
 				if o.caster == myName and o.target == member.name then
 					blessing = o.blessing
 					break
@@ -598,3 +697,29 @@ end)
 CBAB:On("PLAYER_REGEN_ENABLED", "bar:combat-unlock", function()
 	refreshAssignment()
 end)
+
+-- ============================================================
+-- /cbab pbar: toggles debug mode (file header above). Lets the bar be
+-- laid out, populated with a synthetic multi-class/tank roster and
+-- assignment, and clicked on before a live group exists. Toggling off
+-- immediately re-reads real CBAB.Roster/CBAB.DB/CBAB.Track state rather
+-- than waiting for the next live event.
+-- ============================================================
+
+CBAB.SlashCommands.pbar = function()
+	debugMode = not debugMode
+	if debugMode then
+		debugRoster = buildDebugRoster()
+		debugAssignment = buildDebugAssignment()
+		CBAB:Print("pbar debug mode |cff00ff00ON|r -- bar now shows a synthetic roster/assignment. "
+			.. "Only your own class's button targets a real unit; every other button targets a fake "
+			.. "one and won't actually cast. Run |cff3399ff/cbab pbar|r again to turn it off.")
+	else
+		debugRoster, debugAssignment = nil, nil
+		CBAB:Print("pbar debug mode |cffff4444OFF|r -- back to live roster/assignment data.")
+	end
+	refreshLayout()
+	refreshAssignment()
+	refreshVisualState()
+	refreshNextButton()
+end
