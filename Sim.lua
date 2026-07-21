@@ -169,12 +169,21 @@ for _, p in ipairs(fixtures["4_paladins"].paladins) do
 end
 
 -- 5 paladins: adds Light as its own slot.
+-- Duskvow ends up winning the Salvation-carrier slot via the deterministic
+-- tie-break (lowest name among the holy-spec paladins). He needs Sanctuary
+-- himself: Thrallbjorn's want-list [kings,might,light,sanctuary] gets
+-- kings/might/light filled by the other four paladins' greaters, leaving
+-- sanctuary as the only unfilled entry -- if the salv carrier can't cast
+-- it, the want-list walk finds nothing else and Thrallbjorn ends up with
+-- no override at all, correctly triggering Validate's tank_holds_salvation
+-- error. That's the validator working as designed; it just wasn't this
+-- fixture's intent to demonstrate that particular edge case.
 local function fivePaladins()
 	return {
 		pal("Bulwarkk", "protection", { kings = true, sanctuary = true, impMight = 0, impWisdom = 0 }),
 		pal("Lightgrasp", "retribution", { kings = false, sanctuary = false, impMight = 2, impWisdom = 0 }),
 		pal("Sanctara", "holy", { kings = false, sanctuary = false, impMight = 0, impWisdom = 1 }),
-		pal("Duskvow", "holy", { kings = false, sanctuary = false, impMight = 0, impWisdom = 2 }),
+		pal("Duskvow", "holy", { kings = false, sanctuary = true, impMight = 0, impWisdom = 2 }),
 		pal("Farhold", "holy", { kings = false, sanctuary = false, impMight = 0, impWisdom = 0 }),
 	}
 end
@@ -448,13 +457,28 @@ function CBAB.Sim:RunAll()
 			if finding.level == "error" then hasError = true end
 		end
 
+		-- NOT `diff = pass and nil or "..."` -- when the true-branch value
+		-- is nil, that idiom always falls through to the "or" side
+		-- regardless of pass/fail, so it printed the failure message on
+		-- every passing fixture too. Explicit if/else instead.
 		local pass, diff
 		if f.expected then
-			pass = deepEqual(assignment, f.expected)
-			diff = pass and nil or "assignment does not match the committed snapshot"
+			-- CBAB.Solver.Assign always returns epoch/author/timestamp
+			-- placeholders (0/""/0) alongside greaters/overrides, but
+			-- committed snapshots only declare the latter two. Compare only
+			-- what the snapshot actually claims, or deepEqual's strict
+			-- bidirectional key check fails on those extra fields every
+			-- time regardless of whether greaters/overrides are correct.
+			local comparable = { greaters = assignment.greaters, overrides = assignment.overrides }
+			pass = deepEqual(comparable, f.expected)
+			if not pass then
+				diff = "assignment does not match the committed snapshot"
+			end
 		else
 			pass = not hasError
-			diff = pass and nil or "solver produced a validation error -- see /cbab sim " .. name
+			if not pass then
+				diff = "solver produced a validation error -- see /cbab sim " .. name
+			end
 		end
 
 		results[#results + 1] = { name = name, pass = pass, diff = diff }
