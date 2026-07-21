@@ -1,0 +1,23 @@
+name: Release
+
+# Fires on any tag push (e.g. `v1.0.0`). The BigWigs packager reads
+# .pkgmeta (Libs/ externals) and CBABuff_TBC.toc's `## Version:
+# @project-version@` line, substitutes the tag into that line, injects the
+# libraries (never committed -- see .gitignore), zips the result, and
+# attaches it to a GitHub Release for this tag.
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package and release
+        uses: BigWigsMods/packager@v2
+        env:
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}

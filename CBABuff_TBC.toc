@@ -1,0 +1,32 @@
+## Interface: 20506
+## Title: CBA Buff
+## Notes: Paladin blessing management for TBC Anniversary Edition raids.
+## Version: @project-version@
+## SavedVariables: CBABuffDB
+## SavedVariablesPerCharacter: CBABuffCharDB
+
+Libs/LibStub/LibStub.lua
+Libs/LibSerialize/LibSerialize.lua
+Libs/LibDeflate/LibDeflate.lua
+
+locale/enUS.lua
+
+Core.lua
+Data/Spells.lua
+Data/Defaults.lua
+DB.lua
+Capability.lua
+Roster.lua
+Solver/Slots.lua
+Solver/Assign.lua
+Solver/Validate.lua
+Comm.lua
+Track.lua
+Solve.lua
+UI/Bar.lua
+UI/Alert.lua
+UI/Editor.lua
+UI/RosterPage.lua
+UI/Config.lua
+Sim.lua
+Debug.lua

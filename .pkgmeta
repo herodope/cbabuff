@@ -1,0 +1,13 @@
+package-as: CBABuff
+
+externals:
+  Libs/LibStub:
+    url: https://repos.wowace.com/wow/libstub/trunk
+  Libs/LibSerialize:
+    url: https://github.com/rossnichols/LibSerialize.git
+  Libs/LibDeflate:
+    url: https://github.com/SafeteeWoW/LibDeflate.git
+
+ignore:
+  - docs
+  - SPEC.md
