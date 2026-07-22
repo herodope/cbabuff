@@ -60,6 +60,12 @@ local function blessingLabel(key)
 	return b and b.name or key
 end
 
+local function auraLabel(key)
+	if not key then return "-" end
+	local a = CBAB.Auras[key]
+	return a and a.name or key
+end
+
 local function classLabel(class)
 	if not class then return "-" end
 	local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
@@ -243,6 +249,35 @@ UIDropDownMenu_Initialize(profileDropdown, function(self, level)
 end)
 
 -- ============================================================
+-- pbar entry point + pet-display toggle. The roster page is where a
+-- leader plans, so both live here as a convenience alongside the profile
+-- switcher -- /cbab pbar and Config's own controls still work unchanged.
+-- ============================================================
+
+local openPbarButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
+openPbarButton:SetSize(80, 20)
+openPbarButton:SetPoint("TOPLEFT", profileDropdownLabel, "BOTTOMLEFT", 0, -10)
+openPbarButton:SetText("Open pbar")
+openPbarButton:SetScript("OnClick", function()
+	if CBAB.Bar_SetShown then CBAB.Bar_SetShown(true) end
+end)
+
+local showPetsCheckbox = CreateFrame("CheckButton", nil, window, "UICheckButtonTemplate")
+showPetsCheckbox:SetSize(18, 18)
+showPetsCheckbox:SetPoint("LEFT", openPbarButton, "RIGHT", 12, 0)
+local showPetsLabel = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+showPetsLabel:SetPoint("LEFT", showPetsCheckbox, "RIGHT", 4, 0)
+showPetsLabel:SetText("Show pets in pbar (this profile)")
+showPetsCheckbox:SetScript("OnClick", function(self)
+	local profile = CBAB.DB:Profile()
+	if profile and profile.wants then
+		profile.wants.petsEnabled = self:GetChecked() and true or false
+		profile.modified = time()
+		CBAB:Fire("ASSIGNMENT_CHANGED")
+	end
+end)
+
+-- ============================================================
 -- Scroll region holding all three sections
 -- ============================================================
 
@@ -314,6 +349,10 @@ local paladinColHeader = createColumnHeader({
 	{ text = "Tank", x = 150, width = 34 },
 	{ text = "Spec (opt.)", x = 178, width = 62 },
 	{ text = "Assign", x = 242 + DD_TEXT_INSET, width = 90 },
+	-- Aura is manual-only (no solver slot construction, see SPEC.md's v1
+	-- aura scope note) -- this column has no "assumed" auto-fill or
+	-- override-warning the way Assign does, it's just a direct pick.
+	{ text = "Aura", x = 340 + DD_TEXT_INSET, width = 70 },
 })
 
 -- Generic "shield" flavoring for the Tanks separator (spec: "prot warrior
@@ -384,12 +423,16 @@ local function createPaladinRow(index)
 	row.assignDropdown:SetPoint("LEFT", 242, 0)
 	UIDropDownMenu_SetWidth(row.assignDropdown, 90)
 
+	row.auraDropdown = CreateFrame("Frame", "CBABuffRosterPalAuraDD" .. index, row, "UIDropDownMenuTemplate")
+	row.auraDropdown:SetPoint("LEFT", 340, 0)
+	UIDropDownMenu_SetWidth(row.auraDropdown, 70)
+
 	row.warningText = row:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
-	row.warningText:SetPoint("LEFT", row.assignDropdown, "RIGHT", 6, 2)
-	row.warningText:SetWidth(170)
+	row.warningText:SetPoint("LEFT", row.auraDropdown, "RIGHT", 6, 2)
+	row.warningText:SetWidth(130)
 	row.warningText:SetJustifyH("LEFT")
 
-	row.state = { assignOverride = nil }
+	row.state = { assignOverride = nil, auraOverride = nil }
 	return row
 end
 
@@ -424,11 +467,34 @@ local function bindPaladinRow(row)
 		end
 	end)
 
+	-- Manual-only (SPEC.md's v1 aura scope note) -- no "Auto" preview the
+	-- way Assign has, just a direct pick or Clear.
+	UIDropDownMenu_Initialize(row.auraDropdown, function(self, level)
+		local clearInfo = UIDropDownMenu_CreateInfo()
+		clearInfo.text = "Clear"
+		clearInfo.func = function()
+			row.state.auraOverride = nil
+			commit()
+		end
+		UIDropDownMenu_AddButton(clearInfo, level)
+
+		for _, key in ipairs(CBAB.AuraOrder) do
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = auraLabel(key)
+			info.func = function()
+				row.state.auraOverride = key
+				commit()
+			end
+			UIDropDownMenu_AddButton(info, level)
+		end
+	end)
+
 	row.deleteButton:SetScript("OnClick", function()
 		row.nameBox:SetText("")
 		row.tank:SetChecked(false)
 		row.specBox:SetText("")
 		row.state.assignOverride = nil
+		row.state.auraOverride = nil
 		commit()
 	end)
 end
@@ -673,6 +739,16 @@ local function buildPlannedAssignment(profile)
 
 	local assignment = CBAB.Solver.Assign(slots, roster, profile.wants)
 	local validation = CBAB.Solver.Validate(assignment, roster)
+
+	-- Auras are manual-only (SPEC.md's v1 aura scope note) -- no slot
+	-- construction, just a direct copy of each paladin's own dropdown pick.
+	assignment.auras = {}
+	for _, p in ipairs(paladins) do
+		if p.auraOverride then
+			assignment.auras[p.name] = p.auraOverride
+		end
+	end
+
 	return assignment, validation, paladins, slotByName
 end
 
@@ -755,6 +831,8 @@ local function doSolvePlan()
 	assignment.timestamp = time()
 	-- Not pushed yet (spec 8): Comm:PushAssignment marks it "pushed".
 	assignment.source = "local"
+	-- assignment.auras is already populated by buildPlannedAssignment above,
+	-- straight from each paladin row's own Aura dropdown.
 	profile.assignment = assignment
 	profile.modified = time()
 	CBAB:Print(("solved plan for '%s' -- %d override(s). Push to raid when ready."):format(
@@ -790,6 +868,7 @@ commitAll = function()
 					tank = row.tank:GetChecked() and true or false,
 					spec = spec ~= "" and spec:lower() or nil,
 					assignOverride = row.state.assignOverride,
+					auraOverride = row.state.auraOverride,
 				}
 				paladinOrder[#paladinOrder + 1] = name
 			end
@@ -929,6 +1008,7 @@ refreshAll = function()
 		profileNameBox:SetText(profile.name)
 	end
 	UIDropDownMenu_SetText(profileDropdown, profile and profile.name or "Select profile")
+	showPetsCheckbox:SetChecked(profile and profile.wants and profile.wants.petsEnabled and true or false)
 
 	if not profile then
 		for _, row in pairs(palRows) do row:Hide() end
@@ -973,18 +1053,21 @@ refreshAll = function()
 			row.tank:SetChecked(entry.tank and true or false)
 			row.specBox:SetText(entry.spec or "")
 			row.state.assignOverride = entry.assignOverride
+			row.state.auraOverride = entry.auraOverride
 			row.deleteButton:Show()
 		else
 			row.nameBox:SetText("")
 			row.tank:SetChecked(false)
 			row.specBox:SetText("")
 			row.state.assignOverride = nil
+			row.state.auraOverride = nil
 			row.deleteButton:Hide()
 		end
 
 		local assumedBlessing = assumed[i]
 		local effective = row.state.assignOverride or assumedBlessing
 		UIDropDownMenu_SetText(row.assignDropdown, blessingLabel(effective))
+		UIDropDownMenu_SetText(row.auraDropdown, auraLabel(row.state.auraOverride))
 
 		if row.state.assignOverride and row.state.assignOverride ~= assumedBlessing then
 			row.warningText:SetText(("overridden -- assumed %s"):format(blessingLabel(assumedBlessing)))

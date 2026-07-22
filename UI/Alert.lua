@@ -55,6 +55,89 @@ local function formatRemaining(seconds)
 	return ("%d:%02d"):format(math.floor(seconds / 60), seconds % 60)
 end
 
+-- ============================================================
+-- Group-size awareness (rule 1: a unit can only ever hold ONE blessing at a
+-- time, so a plan that assigns several -- e.g. every class-wide Salvation
+-- greater lands on the Paladin class too, or a plan solved for a bigger
+-- raid than is actually live -- can never be fully satisfied at once, and
+-- the alert must not nag about more than the single best of them). Nothing
+-- here mutates the stored assignment; it only decides what's actually
+-- possible and preferred given who is live right now.
+-- ============================================================
+
+local function paladinCanCast(m, blessingId)
+	if not CBAB.Blessings[blessingId].talentGated then return true end
+	local record = CBAB.Cap:Get(m.nameRealm)
+	return record ~= nil and record[blessingId] == true
+end
+
+-- Whether ANY live paladin (not just the one the stored plan names) is
+-- actually able to cast this blessing right now.
+local function feasibleBlessing(blessingId, roster)
+	for _, m in pairs(roster) do
+		if not m.isPet and m.class == "PALADIN" and paladinCanCast(m, blessingId) then
+			return true
+		end
+	end
+	return false
+end
+
+-- The plan's stored caster if they're actually here; otherwise whoever live
+-- and capable can stand in -- preferring the recipient casting on
+-- themselves, matching how a shrunk group naturally has to resolve it.
+local function effectiveCaster(blessingId, storedCaster, unit, roster)
+	for _, m in pairs(roster) do
+		if not m.isPet and m.name == storedCaster then
+			return storedCaster
+		end
+	end
+	local self = roster[unit]
+	if self and not self.isPet and self.class == "PALADIN" and paladinCanCast(self, blessingId) then
+		return self.name
+	end
+	for _, m in pairs(roster) do
+		if not m.isPet and m.class == "PALADIN" and paladinCanCast(m, blessingId) then
+			return m.name
+		end
+	end
+	return storedCaster
+end
+
+local function blessingRank(blessingId)
+	for i, id in ipairs(CBAB.BlessingValueOrder) do
+		if id == blessingId then return i end
+	end
+	return #CBAB.BlessingValueOrder + 1
+end
+
+-- Tanks and pets have an explicit ordered preference (spec 5.5/5.6); anyone
+-- else falls back to the raid-wide importance order (spec 4).
+local function wantListFor(m, profile, rosterByName)
+	if m.isPet then
+		return profile.wants and profile.wants.pet
+	end
+	if m.isTank then
+		local entry = rosterByName[m.name]
+		if entry and entry.tankWantOverride and #entry.tankWantOverride > 0 then
+			return entry.tankWantOverride
+		end
+		return profile.wants.tanks and profile.wants.tanks[m.class]
+	end
+	return nil
+end
+
+-- Lower is better. Want-listed entries always beat unlisted ones; within
+-- each group, list position (or the general importance order) breaks ties.
+local function candidateScore(blessingId, wantList)
+	if wantList then
+		for i, id in ipairs(wantList) do
+			if id == blessingId then return i end
+		end
+		return 1000 + blessingRank(blessingId)
+	end
+	return blessingRank(blessingId)
+end
+
 local function computeRows()
 	local profile = CBAB.DB:Profile()
 	if not profile or not profile.assignment then return {} end
@@ -113,7 +196,12 @@ local function computeRows()
 		return row
 	end
 
-	for unit, blessings in pairs(assigned) do
+	local rosterByName = {}
+	for _, r in ipairs(profile.roster or {}) do
+		rosterByName[r.name] = r
+	end
+
+	for unit, blessingsForUnit in pairs(assigned) do
 		local m = roster[unit]
 		if m then
 			-- Pet suppression (spec 11.3): no row when pets are off, or
@@ -122,45 +210,76 @@ local function computeRows()
 
 			if not suppressed then
 				local unitState = CBAB.Track:StateFor(unit)
-				for blessingId, casterName in pairs(blessings) do
+
+				-- Rule 1: at most one of this unit's candidate blessings can
+				-- ever actually be active. If it's already holding one of
+				-- them, that's the whole story -- fine, or expiring, but
+				-- never "also missing" the rest.
+				local heldBlessing, heldRecord
+				for blessingId in pairs(blessingsForUnit) do
 					local record = unitState[blessingId]
-					local status, remaining
-					if not record then
-						status = "missing"
-					else
-						remaining = (record.expires or 0) - GetTime()
-						if remaining <= threshold then
-							status = "expiring"
+					if record then
+						heldBlessing, heldRecord = blessingId, record
+						break
+					end
+				end
+
+				local chosenBlessing, chosenStatus, chosenRemaining, chosenCaster
+
+				if heldBlessing then
+					local remaining = (heldRecord.expires or 0) - GetTime()
+					if remaining <= threshold then
+						chosenBlessing, chosenStatus, chosenRemaining = heldBlessing, "expiring", remaining
+						chosenCaster = blessingsForUnit[heldBlessing]
+					end
+				else
+					-- Nothing held yet -- of the candidates actually
+					-- castable by someone live right now, surface only the
+					-- single best one (spec: "only display things that are
+					-- possible based on current group").
+					local wantList = wantListFor(m, profile, rosterByName)
+					local bestScore
+					for blessingId in pairs(blessingsForUnit) do
+						if feasibleBlessing(blessingId, roster) then
+							local score = candidateScore(blessingId, wantList)
+							if not bestScore or score < bestScore then
+								chosenBlessing, bestScore = blessingId, score
+							end
 						end
 					end
+					if chosenBlessing then
+						chosenStatus = "missing"
+						chosenCaster = blessingsForUnit[chosenBlessing]
+					end
+				end
 
-					if status then
-						local info = reasonFor[unit] and reasonFor[unit][blessingId]
-						local reason = info and info.reason or "greater"
-						local class = info and info.class or m.class
+				if chosenBlessing then
+					chosenCaster = effectiveCaster(chosenBlessing, chosenCaster, unit, roster)
+					local info = reasonFor[unit] and reasonFor[unit][chosenBlessing]
+					local reason = info and info.reason or "greater"
+					local class = info and info.class or m.class
 
-						if reason == "greater" then
-							local key = ("greater:%s:%s:%s"):format(class, blessingId, status)
-							local row = group(key, function()
-								return {
-									kind = "greater", blessing = blessingId, assignedTo = casterName,
-									status = status, class = class, units = {},
-								}
-							end)
-							row.units[#row.units + 1] = unit
-							if remaining and (not row.soonestRemaining or remaining < row.soonestRemaining) then
-								row.soonestRemaining = remaining
-							end
-						else
-							local key = ("individual:%s:%s"):format(unit, blessingId)
-							group(key, function()
-								return {
-									kind = "individual", blessing = blessingId, assignedTo = casterName,
-									status = status, reason = reason, units = { unit },
-									soonestRemaining = remaining,
-								}
-							end)
+					if reason == "greater" then
+						local key = ("greater:%s:%s:%s"):format(class, chosenBlessing, chosenStatus)
+						local row = group(key, function()
+							return {
+								kind = "greater", blessing = chosenBlessing, assignedTo = chosenCaster,
+								status = chosenStatus, class = class, units = {},
+							}
+						end)
+						row.units[#row.units + 1] = unit
+						if chosenRemaining and (not row.soonestRemaining or chosenRemaining < row.soonestRemaining) then
+							row.soonestRemaining = chosenRemaining
 						end
+					else
+						local key = ("individual:%s:%s"):format(unit, chosenBlessing)
+						group(key, function()
+							return {
+								kind = "individual", blessing = chosenBlessing, assignedTo = chosenCaster,
+								status = chosenStatus, reason = reason, units = { unit },
+								soonestRemaining = chosenRemaining,
+							}
+						end)
 					end
 				end
 			end
@@ -206,6 +325,9 @@ end
 
 local window = CreateFrame("Frame", "CBABuffAlert", UIParent)
 window:SetSize(280, 20)
+window:SetMovable(true)
+window:SetResizable(false) -- resizing goes through the custom grip below, not native frame resize
+window:SetClampedToScreen(true)
 CBAB:ApplyBackdrop(window, {
 	bgFile = "Interface\\Buttons\\WHITE8x8",
 	edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -214,6 +336,121 @@ CBAB:ApplyBackdrop(window, {
 window:SetBackdropColor(0, 0, 0, 0.6)
 window:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
 window:Hide() -- no background when empty (spec 11.3): nothing renders until there's a row
+
+-- ============================================================
+-- Chrome: title, lock/unlock (synced with Config's checkbox through the
+-- shared ui.alert.locked field, same pattern as UI/Bar.lua), close, and a
+-- resize grip. Locking disables both dragging and resizing at once, same
+-- wording and behaviour as the bar's lock.
+-- ============================================================
+
+local TITLE_HEIGHT = 18
+local WINDOW_PADDING = 20 -- window width minus row width
+local TEXT_MARGIN = 12 -- row width minus text width
+local MIN_WINDOW_WIDTH = 160
+
+local titleBar = CreateFrame("Frame", nil, window)
+titleBar:SetPoint("TOPLEFT", 0, 0)
+titleBar:SetPoint("TOPRIGHT", 0, 0)
+titleBar:SetHeight(TITLE_HEIGHT)
+titleBar:EnableMouse(true)
+
+local titleText = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+titleText:SetPoint("LEFT", 6, 0)
+titleText:SetText("Alerts")
+
+local closeButton = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
+closeButton:SetSize(16, 16)
+closeButton:SetPoint("RIGHT", 0, 0)
+
+local lockButton = CreateFrame("Button", nil, titleBar, "UIPanelButtonTemplate")
+lockButton:SetSize(44, 16)
+lockButton:SetPoint("RIGHT", closeButton, "LEFT", -4, 0)
+
+local resizeGrip = CreateFrame("Button", nil, window)
+resizeGrip:SetSize(12, 12)
+resizeGrip:SetPoint("BOTTOMRIGHT", -2, 2)
+resizeGrip.tex = resizeGrip:CreateTexture(nil, "OVERLAY")
+resizeGrip.tex:SetAllPoints()
+resizeGrip.tex:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+
+local function refreshChrome()
+	local locked = CBAB.DB:Char().ui.alert.locked
+	lockButton:SetText(locked and "Unlock" or "Lock")
+	resizeGrip:SetShown(not locked)
+end
+CBAB.Alert_RefreshChrome = refreshChrome
+
+lockButton:SetScript("OnClick", function()
+	local charDB = CBAB.DB:Char()
+	charDB.ui.alert.locked = not charDB.ui.alert.locked
+	refreshChrome()
+end)
+
+local function startDrag()
+	if CBAB.DB:Char().ui.alert.locked then return end
+	window:StartMoving()
+end
+local function stopDrag()
+	window:StopMovingOrSizing()
+	local charDB = CBAB.DB:Char()
+	local point, _, _, x, y = window:GetPoint(1)
+	charDB.ui.alert.point = point
+	charDB.ui.alert.x = x
+	charDB.ui.alert.y = y
+end
+titleBar:RegisterForDrag("LeftButton")
+titleBar:SetScript("OnDragStart", startDrag)
+titleBar:SetScript("OnDragStop", stopDrag)
+
+resizeGrip:SetScript("OnMouseDown", function(self)
+	if CBAB.DB:Char().ui.alert.locked then return end
+	self.dragging = true
+	self.startX = select(1, GetCursorPosition())
+	self.startWidth = window:GetWidth()
+end)
+resizeGrip:SetScript("OnMouseUp", function(self)
+	self.dragging = false
+	CBAB.DB:Char().ui.alert.width = window:GetWidth()
+end)
+resizeGrip:SetScript("OnUpdate", function(self)
+	if not self.dragging then return end
+	local x = select(1, GetCursorPosition())
+	local dx = (x - self.startX) / window:GetEffectiveScale()
+	window:SetWidth(math.max(MIN_WINDOW_WIDTH, self.startWidth + dx))
+	CBAB.Alert_LayoutRows()
+end)
+
+-- ============================================================
+-- Force-show (spec ask): Config's "Show alert now" button bypasses both
+-- autoHide and the empty-window suppression so the window can be seen and
+-- positioned/resized even with nothing currently wrong.
+-- ============================================================
+
+local forceShown = false
+
+local previewText = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+previewText:SetPoint("TOPLEFT", 6, -(TITLE_HEIGHT + 2))
+previewText:SetText("No active alerts (preview)")
+previewText:Hide()
+
+function CBAB.Alert_SetForceShown(shown)
+	forceShown = shown and true or false
+	CBAB.Alert_Refresh()
+end
+
+function CBAB.Alert_IsForceShown()
+	return forceShown
+end
+
+closeButton:SetScript("OnClick", function()
+	forceShown = false
+	window:Hide()
+end)
+
+-- ============================================================
+-- Window + row pool
+-- ============================================================
 
 local ROW_HEIGHT = 18
 local rowPool = {}
@@ -233,13 +470,24 @@ local function getRowFrame(index)
 	return row
 end
 
+-- Reflows every pooled row (including hidden ones, so they're already
+-- correct if reused) to the window's current width -- called after a
+-- refresh and live while dragging the resize grip.
+function CBAB.Alert_LayoutRows()
+	local rowWidth = math.max(20, window:GetWidth() - WINDOW_PADDING)
+	for _, row in pairs(rowPool) do
+		row:SetWidth(rowWidth)
+		row.text:SetWidth(math.max(10, rowWidth - TEXT_MARGIN))
+	end
+end
+
 local function populateWindow(rows)
 	local myName = UnitName("player")
 
 	for i, data in ipairs(rows) do
 		local row = getRowFrame(i)
 		row:ClearAllPoints()
-		row:SetPoint("TOPLEFT", window, "TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+		row:SetPoint("TOPLEFT", window, "TOPLEFT", 0, -(TITLE_HEIGHT + (i - 1) * ROW_HEIGHT))
 		row:Show()
 		row.text:SetText(describeRow(data))
 
@@ -262,7 +510,9 @@ local function populateWindow(rows)
 		rowPool[i]:Hide()
 	end
 
-	window:SetSize(280, math.max(1, #rows) * ROW_HEIGHT)
+	CBAB.Alert_LayoutRows()
+	previewText:SetShown(#rows == 0 and forceShown)
+	window:SetHeight(TITLE_HEIGHT + math.max(#rows, 1) * ROW_HEIGHT)
 end
 
 -- ============================================================
@@ -277,7 +527,7 @@ local CLEAN_HIDE_DELAY = 3
 local cleanSince
 
 local function updateVisibility(hasRows)
-	if hasRows then
+	if hasRows or forceShown then
 		cleanSince = nil
 		local ui = CBAB.DB:Char().ui.alert
 		if ui.hideInCombat and InCombatLockdown() then
@@ -416,6 +666,7 @@ local function refresh()
 	checkOwnWarnings(rows)
 	checkWhisperWarnings(rows)
 end
+CBAB.Alert_Refresh = refresh
 
 CBAB:On("BUFF_STATE_CHANGED", "alert:refresh", refresh)
 CBAB:On("ASSIGNMENT_CHANGED", "alert:refresh-assignment", refresh)
@@ -443,5 +694,8 @@ CBAB:On("ADDON_LOADED", "alert:init", function(loadedAddon)
 	window:ClearAllPoints()
 	window:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or 200)
 	window:SetScale(ui.scale or 1.0)
+	window:SetWidth(ui.width or 280)
+	CBAB.Alert_LayoutRows()
+	refreshChrome()
 	CBAB:Off("ADDON_LOADED", "alert:init")
 end)

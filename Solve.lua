@@ -161,7 +161,10 @@ local function printSolveSummary(assignment, validation)
 	end
 end
 
-local function SolveSlash()
+-- CBAB.Solve:RunLive() -- the live-data solve (spec 11.1), shared by
+-- `/cbab solve` and the pbar's Solve button (UI/Bar.lua) so there is one
+-- code path, not two copies that can drift.
+function CBAB.Solve:RunLive()
 	if InCombatLockdown() then
 		CBAB:Print("|cffff4444cannot solve in combat|r -- Solve is manual-only and gated out of combat (spec 11.1)")
 		return
@@ -189,6 +192,9 @@ local function SolveSlash()
 	-- pushed/local/default). CBAB.Comm:PushAssignment marks it "pushed"
 	-- once it's actually sent.
 	assignment.source = "local"
+	-- Auras are manual-only (SPEC.md's v1 aura scope note) -- carried
+	-- forward from whatever was already planned rather than solved.
+	assignment.auras = (profile.assignment and profile.assignment.auras) or {}
 
 	profile.assignment = assignment
 	profile.modified = time()
@@ -197,7 +203,7 @@ local function SolveSlash()
 	printSolveSummary(assignment, validation)
 end
 
-CBAB.SlashCommands.solve = SolveSlash
+CBAB.SlashCommands.solve = function() CBAB.Solve:RunLive() end
 
 -- ============================================================
 -- Plan-diff nag (spec 6.3, 6.4): never auto-solves, just tells the leader

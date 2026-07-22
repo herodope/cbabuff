@@ -37,9 +37,14 @@ else
 end
 
 -- ============================================================
--- Reverse lookup: spellID -> {blessingId, isGreater}. Built once from
--- Data/Spells.lua's pure data (spec: spell ID matching only, never name
--- or rank string).
+-- Reverse lookup: spellID -> {id, isGreater, isAura}. Built once from
+-- Data/Spells.lua and Data/Auras.lua's pure data (spec: spell ID matching
+-- only, never name or rank string). Auras are self-cast with no
+-- greater/normal split, so they land in the SAME reverse map and the SAME
+-- per-unit state table as blessings (isGreater always false, isAura=true
+-- instead) -- an aura is read off whichever unit is tracked casting it,
+-- which for a self-buff is always that paladin's own unit, so no separate
+-- scan path is needed.
 -- ============================================================
 
 local spellToBlessing = {}
@@ -49,6 +54,11 @@ for blessingId, blessing in pairs(CBAB.Blessings) do
 	end
 	for _, spellId in ipairs(blessing.greaterIDs) do
 		spellToBlessing[spellId] = { id = blessingId, isGreater = true }
+	end
+end
+for auraId, aura in pairs(CBAB.Auras) do
+	for _, spellId in ipairs(aura.ids) do
+		spellToBlessing[spellId] = { id = auraId, isGreater = false, isAura = true }
 	end
 end
 
@@ -86,6 +96,7 @@ local function scanUnit(unit)
 					expires = aura.expirationTime,
 					caster = aura.source,
 					isGreater = blessing.isGreater,
+					isAura = blessing.isAura,
 				}
 			end
 		end

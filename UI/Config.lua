@@ -112,6 +112,16 @@ nextY = nextY - 8
 -- ============================================================
 
 sectionHeader("Paladin bar")
+
+local openPbarButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
+openPbarButton:SetSize(80, 20)
+openPbarButton:SetPoint("TOPLEFT", 20, nextY)
+openPbarButton:SetText("Open pbar")
+openPbarButton:SetScript("OnClick", function()
+	if CBAB.Bar_SetShown then CBAB.Bar_SetShown(true) end
+end)
+nextY = nextY - 26
+
 checkbox("Show bar", function() return CBAB.DB:Char().ui.bar.shown ~= false end,
 	function(v) CBAB.Bar_SetShown(v) end)
 checkbox("Locked (disable dragging and resizing)", function() return CBAB.DB:Char().ui.bar.locked end,
@@ -127,10 +137,33 @@ numberField("Scale (%)", function() return math.floor(CBAB.DB:Char().ui.bar.scal
 nextY = nextY - 8
 
 sectionHeader("Alert window")
+
+-- Force-show a button, not a checkbox (unlike "Show bar"): there's nothing
+-- to persist -- it's purely a one-shot preview so the alert window can be
+-- seen and positioned/resized even while nothing is actually wrong.
+local previewButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
+previewButton:SetSize(150, 20)
+previewButton:SetPoint("TOPLEFT", 20, nextY)
+previewButton:SetText("Show alert (preview)")
+previewButton:SetScript("OnClick", function()
+	CBAB.Alert_SetForceShown(not CBAB.Alert_IsForceShown())
+	previewButton:SetText(CBAB.Alert_IsForceShown() and "Hide preview" or "Show alert (preview)")
+end)
+previewButton.refresh = function()
+	previewButton:SetText(CBAB.Alert_IsForceShown() and "Hide preview" or "Show alert (preview)")
+end
+sections[#sections + 1] = previewButton
+nextY = nextY - 26
+
 checkbox("Auto-hide when clean", function() return CBAB.DB:Char().ui.alert.autoHide end,
 	function(v) CBAB.DB:Char().ui.alert.autoHide = v end)
 checkbox("Suppress in combat", function() return CBAB.DB:Char().ui.alert.hideInCombat end,
 	function(v) CBAB.DB:Char().ui.alert.hideInCombat = v end)
+checkbox("Locked (disable dragging and resizing)", function() return CBAB.DB:Char().ui.alert.locked end,
+	function(v)
+		CBAB.DB:Char().ui.alert.locked = v
+		if CBAB.Alert_RefreshChrome then CBAB.Alert_RefreshChrome() end
+	end)
 numberField("X offset", function() return CBAB.DB:Char().ui.alert.x end,
 	function(v) CBAB.DB:Char().ui.alert.x = v end)
 numberField("Y offset", function() return CBAB.DB:Char().ui.alert.y end,

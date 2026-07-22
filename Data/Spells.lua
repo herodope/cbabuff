@@ -7,6 +7,13 @@ local ADDON, CBAB = ...
 -- Deterministic iteration order for the six blessing ids.
 CBAB.BlessingOrder = { "salv", "kings", "might", "wisdom", "light", "sanctuary" }
 
+-- Raid-wide importance order (spec 4's Blessing value model), most valuable
+-- first. Used as the tie-break priority when a unit ends up with more than
+-- one candidate blessing assigned at once (rule 1: only one blessing can
+-- ever be active on a unit) and no role-specific want-list (tank/pet)
+-- applies -- see UI/Alert.lua's candidateScore.
+CBAB.BlessingValueOrder = { "salv", "kings", "light", "might", "wisdom", "sanctuary" }
+
 CBAB.Blessings = {
 	salv = {
 		name = "Salvation",

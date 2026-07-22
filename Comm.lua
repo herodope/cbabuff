@@ -53,6 +53,13 @@ local function groupChannel()
 	return nil
 end
 
+-- Exposed so other modules (the pbar's Report button) can post to the same
+-- channel Comm itself sends on, without duplicating the IsInRaid/IsInGroup
+-- logic above.
+function CBAB.Comm:GroupChannel()
+	return groupChannel()
+end
+
 -- Reject rule (spec 8 throttle policy): only current raid/party members or
 -- guildmates are trusted. Group-channel messages are already restricted to
 -- group members by WoW's own delivery (a non-member literally can't send

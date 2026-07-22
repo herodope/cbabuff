@@ -113,8 +113,15 @@ confirmation once someone has points in either Improved talent would close this 
   within about a quarter second. Rebuff — it should disappear after a few seconds of clean
   state, not instantly (that delay is intentional, to avoid flicker on a one-flush blip).
 
-## 8. Paladin bar — macro compatibility, HIGH RISK for anyone with existing PallyPower macros
+## 8. Paladin bar (pbar grid) — macro compatibility, HIGH RISK for anyone with existing PallyPower macros
 
+The bar was rewritten from a single class-button row into a paladin-rows × class-columns grid
+(SPEC.md 11.2, amended). Row 1 is still the old single row under the hood — it's the only place
+the `PallyPowerC1`–`PallyPowerC9`/`PallyPowerRF` compat names live — so everything below that's
+unchanged from the original design still needs checking exactly as before, plus the new grid
+items after it.
+
+**Unchanged (still row 1 / toolbar):**
 - Have a raider with an old PallyPower macro run it unmodified against your raid. `C1`–`C9`
   aren't fixed to specific classes — like PallyPower, they're compacted to whichever classes are
   actually present, in the fixed order Warrior/Rogue/Priest/Druid/Paladin/Hunter/Mage/Warlock/
@@ -124,14 +131,81 @@ confirmation once someone has points in either Improved talent would close this 
   troubleshoot.
 - Click a class button in combat — it should silently do nothing (no taint error in
   `/console scriptErrors 1` output). Out of combat it should cast normally.
-- Hover a class button — individual player buttons should pop out below it; clicking one should
-  cast on that specific person, including while in combat.
+- Hover a row-1 class button — individual player buttons should pop out below it; clicking one
+  should cast on that specific person, including while in combat. This popout is row-1-only by
+  design; other rows don't have it (see below).
 - Shift-click a class button and confirm the border color updates immediately rather than
-  waiting for the next natural buff-state refresh.
+  waiting for the next natural buff-state refresh. Try this on a row-2+ cell too, not just row 1
+  — the shift-refresh binding was a real bug during development (only wired to whatever rows
+  existed at file-load time, i.e. row 1 alone) before being fixed to bind at cell-creation time.
 - If you also have PallyPower installed, confirm the one-time collision popup appears exactly
   once (check `/reload` doesn't re-show it).
 
-## 9. Alert window and warnings
+**New — grid structure, HIGH RISK (never run against a live client):**
+- With 2+ paladins in the assignment (via `/cbab solve`, or Solve/Push from another client),
+  confirm a row appears for each one, alphabetically after row 1 (which is always you). Confirm
+  the row count updates live as paladins are added to/removed from the plan (ASSIGNMENT_CHANGED)
+  and as the raid's class composition changes (ROSTER_CHANGED) — both should trigger a full
+  re-layout, not just a visual refresh.
+- Confirm a row-2+ cell's left-click actually casts the blessing shown in that cell, using YOUR
+  own known rank — not a no-op, and not somehow casting as the other paladin (which is
+  impossible and would indicate a serious bug if it appeared to happen). If you don't know that
+  spell, the click should be a silent no-op, same as clicking a class button in combat.
+- Toggle a row's **Manual** checkbox. Confirm a small edit overlay appears on that row's cells,
+  clicking one opens a dropdown (Clear + blessing/Aura list), and picking an entry writes to
+  the assignment and refreshes every client's ASSIGNMENT_CHANGED-driven UI (roster page, other
+  paladins' bars). Confirm you can toggle Manual on your OWN row regardless of leader status, but
+  **cannot** toggle it on someone else's row unless you're the leader/an assist — the checkbox
+  should be disabled (not just inert) in that case.
+- Confirm the green check overlay reflects FULL class coverage (every live member of that class
+  holding the blessing), not just the single representative unit the secure attribute targets —
+  the easiest way to check this is a class with 2+ members where only one currently holds the
+  buff; the checkmark should be absent until all of them do.
+- Toggle "Show pets in pbar" (roster page or Config) and confirm the Pets column appears/
+  disappears across every row immediately, and that only the paladin actually holding pet
+  overrides (normally the salv carrier) has a populated Pets cell — every other row's Pets cell
+  should render as empty/neutral, not an error.
+- Click **Solve** in the toolbar out of combat and confirm it matches `/cbab solve`'s result
+  exactly (same code path, `CBAB.Solve:RunLive`) — try it while pbar debug mode is on and confirm
+  it refuses with a clear message instead of solving against the synthetic roster.
+- Click **Sync** and confirm it behaves identically to whatever `/cbab check`'s underlying HELLO
+  broadcast does — `CBAB.Comm:EpochTable()` should populate/update within a few seconds.
+- Click **Report** as the leader/an assist — confirm one raid-chat line per paladin appears,
+  under 255 characters each. Click it as a non-coordinator and confirm it refuses with a chat
+  message instead of silently doing nothing or erroring.
+- Confirm the sync indicator next to each paladin's name (`Y`/`N`/`?`) tracks `CBAB.Comm
+  :EpochTable()` sensibly: `?` for a paladin who's never sent anything, `N` (red) for one whose
+  known epoch is behind yours, `Y` (green) once they've caught up. Your own row should always
+  read "(you)", never a sync status.
+- Resize/reposition sanity: with 4+ paladin rows and every column shown (Pets + Aura + several
+  classes), confirm the window grows to fit without clipping the Manual checkbox off the right
+  edge, and that a comp with only 1-2 classes populated doesn't push the Manual checkbox/label
+  into negative x (off the left edge) — this was a real layout bug during development, fixed by
+  reserving a fixed-width Manual column rather than sizing it off the (possibly tiny) grid width.
+
+## 9. Auras (pbar's Aura column/cell, roster page's Aura dropdown) — HIGH RISK, unverified spell IDs
+
+Auras are new in this pass (SPEC.md 2, amended into v1 scope as **manual-only**) — no solver
+involvement, so the only things to actually verify are the data (spell IDs) and the display.
+
+- **HIGH RISK — verify these against a live client** with `/dump GetSpellInfo(id)`, the same way
+  Data/Spells.lua's ranks were checked: every ID in `Data/Auras.lua`'s `devotion`, `retribution`,
+  `concentration`, and `sanctity` rank lists. These were never confirmed in-game (no interpreter
+  or live client available during development, same caveat as the rest of this file) — if any
+  come back nil or wrong, that Aura will silently never read as "active," exactly like a wrong
+  blessing rank would.
+- Pick an Aura for a paladin on the roster page's Aura dropdown, confirm the pbar's Aura cell
+  for that paladin's row shows the right icon after the next Solve (plan)/ASSIGNMENT_CHANGED.
+- Actually cast that Aura on the assigned paladin's own character and confirm the cell's green
+  check appears and the border goes green — Auras have no fixed duration (unlike blessings),
+  so confirm the cell does NOT show a cooldown swipe/countdown, just a steady "active" state.
+  Cancel/swap the Aura and confirm the cell goes back to missing (red) promptly.
+- Confirm `Data/Auras.lua`'s spell IDs were correctly folded into `CBAB.WatchedSpellIDs` — easiest
+  check is `/cbab dump spells` still lists only blessings (Auras aren't in that dump), but
+  `/cbab perf`'s aura-event counters should still tick up when an Aura is cast/swapped, same as a
+  blessing would, confirming Track.lua is actually watching for it.
+
+## 10. Alert window and warnings
 
 - Confirm the window has no visible background/frame at all when there are zero problems, not
   just an empty box.
@@ -140,7 +214,46 @@ confirmation once someone has points in either Improved talent would close this 
 - Confirm the raid-warning "Post" button only appears for the leader/an assist, and never fires
   on its own — it must never make a sound or post anything without you clicking it.
 
-## 10. Packaging (the one thing that's mechanically checkable without a live client)
+**New — chrome (title/lock/close/resize), HIGH RISK (never run against a live client):**
+- Config's "Show alert now (preview)" button should force the window visible (with a "No active
+  alerts (preview)" placeholder line) even with zero problems and even if auto-hide is on; click
+  it again ("Hide preview") and confirm it disappears immediately if there's still nothing wrong.
+- Config's "Locked" checkbox and the alert window's own Lock/Unlock title-bar button both write
+  the same `ui.alert.locked` field — toggling either one should update the OTHER'S label/behavior
+  the next time that widget is shown or clicked (they don't push live to an already-open Config
+  page the way the checkbox pushes to an already-open alert window, matching the bar's existing
+  Lock/Config asymmetry — not a bug if the alert window's button doesn't relabel the still-open
+  Config checkbox, it doesn't for the bar either).
+- While unlocked, drag the title bar and confirm the window moves and the new position survives
+  `/reload`. While locked, confirm dragging the title bar does nothing.
+- While unlocked, drag the bottom-right resize grip and confirm the window (and every row's text)
+  widens/narrows live, without waiting for the next alert refresh, and that the width survives
+  `/reload`. While locked, confirm the grip is hidden entirely.
+- Click the X — confirm it hides the window immediately and cancels an active preview, but a real
+  still-unresolved problem should bring the window back on the next buff/roster event (this is
+  intentional: X is a dismiss, not a permanent "hide the alert forever" toggle like the bar's
+  close button).
+
+**New — group-size-aware row collapsing (rule 1: only one blessing can ever be active on a unit
+at once), HIGH RISK, the riskiest logic change in this pass, never run against a live client:**
+- Reproduce the original bug report: solve/plan an assignment sized for more paladins than are
+  actually in your live group (e.g. a 3-paladin plan with only one paladin present), and confirm
+  the alert window shows exactly ONE row for that paladin, not one per class-wide greater/
+  override that happens to apply to them.
+- Confirm the ONE row shown is the highest-priority one that's actually castable right now — for
+  a tank, that means the class's tank want-list order (or their roster-page override list if they
+  have one); for a hunter pet, `wants.pet`'s order; for anyone else, the spec 4 importance order
+  (Salvation > Kings > Light > Might > Wisdom). If a candidate is talent-gated (Kings, Sanctuary)
+  and nobody live actually has that talent, confirm it's skipped in favor of the next-best
+  candidate instead of being suggested anyway.
+- Cast the suggested blessing on that unit and confirm the row disappears — and stays gone (no
+  other candidate row reappears demanding a *different* one of the several originally assigned),
+  since holding any one of them satisfies the single aura slot. Let it run down past the warning
+  threshold and confirm it comes back as "expiring" for that SAME blessing, not a different one.
+- Sanity-check the common case is unaffected: a normal multi-paladin raid where each unit really
+  only has one thing assigned should look and behave exactly as before this change.
+
+## 11. Packaging (the one thing that's mechanically checkable without a live client)
 
 - Push a version tag (e.g. `v0.1.0`) and confirm the GitHub Action produces a Release with a
   zip attached.
@@ -150,6 +263,13 @@ confirmation once someone has points in either Improved talent would close this 
 
 ## Known, already-disclosed gaps (not bugs to chase)
 
+- Auras have no solver: there is no auto-assignment, no capability gate (even Sanctity Aura's
+  talent requirement, recorded in `Data/Auras.lua`, isn't read anywhere yet), and no duplicate-
+  type warning if two paladins are manually assigned the same Aura. This is deliberate v1 scope
+  (SPEC.md 2), not an oversight.
+- The pbar grid (UI/Bar.lua) is a from-scratch rewrite that, like the rest of this addon, has
+  never been run against a live client or a Lua interpreter — treat every item in section 8 as
+  genuinely unverified, not a formality.
 - RF's right-click (seal) is unimplemented — no config UI exists yet to pick a seal.
 - There is no want-list editing UI anywhere; the "tank conflict" marker in the editor opens a
   chat summary, not a real editor.

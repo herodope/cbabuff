@@ -35,7 +35,14 @@ CBAB.Defaults.char = {
 	schemaVersion = 1,
 	ui = {
 		bar = { point = "CENTER", x = 0, y = -180, scale = 1.0, locked = false, compact = true, shown = true },
-		alert = { point = "CENTER", x = 0, y = 200, scale = 1.0, autoHide = true, hideInCombat = true },
+		alert = {
+			point = "CENTER", x = 0, y = 200, scale = 1.0, autoHide = true, hideInCombat = true,
+			-- Locked by default (spec: same "avoid an accidental drag mid-raid"
+			-- reasoning as the bar), and a persisted width for the resize grip --
+			-- height is always content-driven (title bar + row count), never
+			-- stored.
+			locked = true, width = 280,
+		},
 	},
 	warnings = { enabled = true, threshold = 120, sound = true, screenText = true, whisper = false },
 	debug = { enabled = false, verbose = false },

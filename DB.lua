@@ -146,6 +146,10 @@ function CBAB.DB:CreateProfile(name)
 			timestamp = 0,
 			greaters = {},
 			overrides = {},
+			-- [paladinName] = auraId. Manual-only in v1 (see SPEC.md) -- no
+			-- solver slot construction, just a plan field the roster page and
+			-- pbar read/write directly.
+			auras = {},
 		},
 	}
 	return true
@@ -209,6 +213,11 @@ local function validateAssignment(assignment)
 	if type(assignment.epoch) ~= "number" then return false, "assignment.epoch must be a number" end
 	if type(assignment.greaters) ~= "table" then return false, "assignment.greaters must be a table" end
 	if type(assignment.overrides) ~= "table" then return false, "assignment.overrides must be a table" end
+	-- Optional: older exports predate the auras field (added alongside the
+	-- pbar grid). Absent is fine; present-but-wrong-typed is not.
+	if assignment.auras ~= nil and type(assignment.auras) ~= "table" then
+		return false, "assignment.auras must be a table"
+	end
 	return true
 end
 

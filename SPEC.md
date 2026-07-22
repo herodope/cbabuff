@@ -68,7 +68,17 @@ No Ace3. No LibClassicDurations. No LibUIDropDownMenu.
 ### Explicitly out of scope for v1
 
 - Non-paladin buffs (Fortitude, Arcane Intellect, Gift of the Wild, totems) — v3
-- Paladin auras, seals, Righteous Fury — v2
+- Paladin Auras are now IN SCOPE for v1 as **manual-only display/assignment**
+  (amended -- see 11.2's pbar grid and the Aura column in 11.6). There is
+  deliberately **no solver slot construction for Auras** the way there is for
+  blessings (5.1-5.3): no capability gate (Sanctity Aura's talent requirement
+  is recorded in `Data/Auras.lua` but not yet read by Capability.lua), no
+  value-order, no auto-assignment. A leader picks each paladin's Aura by hand
+  on the roster page or the pbar grid; nothing more sophisticated than "don't
+  duplicate types" is asked of them. Automatic Aura slot-filling, à la the
+  blessing solver, stays out of scope and would need its own spec amendment.
+  Seals and Righteous Fury remain v2 -- the `PallyPowerRF` button exists only
+  for macro-name compatibility (11.2), its seal half is still unwired
 - Automatic Salvation self-cancelling — deferred, see section 5.7
 - Reagent / Symbol of Kinship tracking — never
 - Warlock pet blessings — never
@@ -544,6 +554,15 @@ CBABuffDB = {
           { caster="Sanctara", target="raidpet3",    blessing="might", reason="pet",
             owner="Kaelthon" },
         },
+
+        -- [paladinName] = auraId. Manual-only (spec 2's amended v1 scope) --
+        -- no slot construction, just a direct pick surfaced on the roster
+        -- page's Aura column and the pbar grid's Aura cell. Optional: older
+        -- exports predate this field; DB.lua's import validation accepts a
+        -- missing `auras` table but rejects a present-and-wrong-typed one.
+        auras = {
+          ["Bulwarkk"] = "devotion",
+        },
       },
     },
   },
@@ -628,7 +647,13 @@ Contains, in the roster page's Assignments section:
 
 There is no auto-solve in v1.
 
-### 11.2 Paladin bar
+### 11.2 Paladin bar (pbar)
+
+Amended into a PallyPower-style **grid**: one row per paladin, one column per populated class
+plus Pets and Aura, so the bar is a full raid-wide overview -- not just the local player's own
+casting row -- while remaining a click-to-cast tool, not a read-only report. Reachable via
+`/cbab pbar` (see below), a "Show bar"/"Open pbar" pair on the Config page (11.5), and an
+"Open pbar" button on the roster page (11.6).
 
 Frames **must** be named `PallyPowerC1` .. `PallyPowerC9` and `PallyPowerRF`, and must preserve
 PallyPower's click semantics, so existing raid macros keep working:
@@ -638,23 +663,57 @@ PallyPower's click semantics, so existing raid macros keep working:
 /click PallyPowerRF RightButton Down   → seal
 ```
 
-- Left click on class button: greater blessing. Right click: normal blessing
-- Pop-out player buttons for single-target casts
-- Class buttons blocked in combat; player buttons allowed
-- Secure action button attributes may only be set out of combat — guard with `InCombatLockdown()`
-- Visual: icon plus timer, class name **always visible** underneath each button (supersedes the
-  original hover-only choice), coloured **border** for state (missing / expiring / good) rather
-  than a filled background
-- Shift-click forces a refresh even when the duration guard would block it
-- A "cast next needed" button picks the single highest-value missing blessing
-- The paladin's own summary ("here is your job") is a **tooltip on the drag handle**, not a page
+These compat-named buttons are **row 1**, always the local player, always first. Every other
+paladin's row uses ordinary pooled frames -- compatibility is scoped to the C1-C9/RF set only,
+never extended per-row.
 
-The bar is a real window, not loose floating buttons: a backdrop panel with a title row (drag
-handle + tooltip, "CBA Buff" title text, Lock/Unlock, Close) and a resize grip in the bottom-right
-corner that adjusts the same scale value as the Config page's "Scale (%)" field. The panel lays
-out and sizes itself immediately at `ADDON_LOADED`, not only after the first live roster event, so
-its chrome is visible even before any group exists. None of this touches secure attributes --
-sizing, backdrop, and label text are always safe to change regardless of combat.
+**Layout, top to bottom:**
+- Title row (drag handle + tooltip, "CBA Buff" title text, Lock/Unlock, Close)
+- Toolbar row: `Solve` (runs the same live-data solve as `/cbab solve`, spec 11.1, blocked in
+  combat), `Sync` (a manual `HELLO` broadcast -- spec 8's request/pull, not a push), `Report`
+  (posts a raid-chat summary of the current assignment, one line per paladin -- spec 11.4's
+  "manual button, never automatic," coordinator-gated same as Push), the `PallyPowerRF` button,
+  and the "cast next needed" button. The latter two are single per-player utilities, not part of
+  the per-class grid, so they live in the toolbar rather than inside any one paladin's row
+- One block per paladin row: paladin name plus a sync indicator (`Y`/`N`/`?` against
+  `CBAB.Comm:EpochTable()`, or "(you)" for the local player's own row -- spec 8's epoch model),
+  an assignment summary line (greater blessings, override count, Aura), a **Manual** checkbox,
+  then the row's cells: one per populated class column, a Pets cell, and an Aura cell. Column
+  labels (class name, "Pets", "Aura") are shown once, above row 1, not repeated per row
+- Resize grip in the bottom-right corner, adjusting the same scale value as the Config page's
+  "Scale (%)" field
+
+**Cell click semantics:** left click on a class cell casts that row's assigned greater blessing on
+a representative member of the class (`[nocombat]`-gated, spec 11.2's original combat block);
+right click casts the normal-rank version on current target. Pets/Aura cells are plain
+single/self-target spell attributes with no combat gate, same as the popout and next-needed
+buttons. **Every cell, in every row, casts using the CLICKING player's own known rank** (spellN
+attributes auto-resolve to the caster's own spellbook) -- the row only determines which
+blessing/Aura gets requested, never who casts it. There is no way for one client to cast as
+another player; clicking a cell under a row that isn't yours is a harmless no-op if you don't
+know that spell, and a legitimate "help cover this" cast if you do.
+
+**Coverage and duration:** a green check overlay means **every live member of the class** holds
+the assigned blessing (queried across the whole class, not just the one representative unit the
+secure attribute targets) -- Pets/Aura cells use the equivalent "all assigned pets covered" /
+"the paladin's own Aura buff is active" check. Border colour (missing / expiring / good, never a
+filled background) and the Cooldown swipe/timer follow the representative unit's own record, and
+every cell carries a tooltip with the exact remaining time. Auras have no fixed duration (they're
+indefinite while active, not on blessings' 10/30-minute timers) -- their cell shows "active, no
+countdown" rather than a swipe.
+
+**Manual override:** each row's Manual checkbox shows a small edit affordance on that row's cells;
+clicking one opens a picker (Clear, or a blessing/Aura) that writes straight to
+`profile.assignment`, the same table Solve.lua and the roster page already write to directly.
+Editing your **own** row is a spec 8 "local override" (marks `source="local"`, bumps
+`localRevision`); editing someone **else's** row is a coordinator-only plan edit (gated same as
+Push) that travels on the next Solve/Push cycle rather than its own epoch bump.
+
+**Pets column:** shown only when the active profile's `wants.petsEnabled` is on (spec 5.6) --
+toggleable from either the Config page (11.5) or a "Show pets in pbar" checkbox on the roster
+page (11.6); both write the same profile field. A row's Pets cell is populated only for whichever
+paladin actually owns pet overrides (normally the salv carrier) -- every other row's Pets cell is
+blank, which is expected, not a bug.
 
 Visibility is a persisted per-character setting (`ui.bar.shown`, default true). The title row's
 Close button, `/cbab bar`, and a "Show bar" checkbox on the Config page (11.5) all toggle it, so
@@ -665,15 +724,20 @@ one-time popup: both use the same button names, macros will be unpredictable, di
 Do not import PallyPower's SavedVariables.
 
 `/cbab pbar` toggles a debug mode that substitutes a synthetic multi-class/tank roster and
-assignment for CBAB.Roster/CBAB.DB's live data, so the bar's layout, icons, and click-through can
-be exercised before a live group exists. Only the player's own class button targets the real
-`player` unit and can actually cast; every other button targets a fake unit token by design.
-Buff-state coloring (Track.lua) is not faked -- every button reads as "missing" in this mode.
+assignment for CBAB.Roster/CBAB.DB's live data, so row 1's layout, icons, and click-through can be
+exercised before a live group exists. It only ever populates row 1 (the local player) -- it's a
+column/layout test, not a multi-paladin roster simulator. Only the player's own class button
+targets the real `player` unit and can actually cast; every other button targets a fake unit token
+by design. Buff-state coloring (Track.lua) is not faked -- every button reads as "missing" in this
+mode.
 
 ### 11.3 Alert window
 
-Auto-hiding. No background when empty. Appears only when something is wrong. Rows are grouped
-by **cause**, not by player:
+Auto-hiding. No background when empty. Appears only when something is wrong. A title bar reads
+"Alerts" with a Lock/Unlock button (synced with the Config page's checkbox, spec 11.5, through
+the shared `ui.alert.locked` field) and an X to dismiss. While unlocked, the title bar drags to
+reposition and a bottom-right grip resizes the window's width; both are disabled while locked, and
+the grip is hidden entirely rather than just inert. Rows are grouped by **cause**, not by player:
 
 ```
 Warriors — no Greater Kings           [cast]
@@ -687,6 +751,22 @@ Pet rows appear only when `wants.petsEnabled` is true.
 - Rows are click-to-cast if you are the assigned paladin, otherwise dim and informational
 - Auto-hides after N seconds of clean state, reappears instantly on a problem
 - Suppressed in combat by default (toggleable)
+
+**Rule 1 exclusivity, not just per-paladin planning.** A unit can only ever hold one blessing at a
+time, but the stored plan routinely assigns several to the same unit — every class gets both a
+Salvation greater and (if the slot exists) a Kings greater from the "Uniform slots" pass (5.1),
+and a plan solved for a bigger raid than is currently live leaves every recipient still carrying
+all of the original casters' class-wide assignments even though only one paladin is actually
+there to deliver any of them. The alert window is the only place this collapse happens (the stored
+assignment itself is never rewritten): for each unit, if it's already holding one of its own
+candidate blessings, that's the whole story — clean, or expiring, but never "also missing" the
+rest. Otherwise, of the candidates some live paladin can actually cast right now (talent-gated
+ones need a live Kings/Sanctuary holder — an unfilled talent requirement is silently dropped, not
+suggested), exactly one row is shown: the tank's want-list order for a tank, `wants.pet`'s order
+for a pet, or the raid-wide importance order (section 4: Salvation > Kings > Light > Might >
+Wisdom) for anyone else. The row's caster is the plan's stored caster if they're live, otherwise
+whichever live paladin can actually deliver it (preferring the recipient casting on themselves) —
+so the row stays click-to-cast even when the plan's original caster has left the group.
 
 ### 11.4 Warnings
 
@@ -703,22 +783,35 @@ Automatic raid-channel spam is prohibited. It is how addons get uninstalled.
 
 Warnings, bar and alert positioning, debug toggles, and **hunter pet blessings
 on/off**. The pet toggle is marked as a profile-level, raid-wide setting so it is clear that
-changing it alters the plan everyone receives.
+changing it alters the plan everyone receives. An "Open pbar" button sits above the "Show bar"
+checkbox -- the checkbox is the show/hide toggle (11.2), the button is a direct show-and-raise
+entry point, mirroring the one on the roster page (11.6).
+
+The alert window section carries the same "Locked (disable dragging and resizing)" checkbox
+wording as the bar's, writing `ui.alert.locked` (synced with the alert window's own title-bar
+Lock/Unlock button, spec 11.3). Above it, a "Show alert (preview)" button force-shows the alert
+window with a placeholder line even when there are zero problems and auto-hide is on -- purely a
+one-shot preview so the window can be seen and positioned/resized, not a persisted setting.
 
 ### 11.6 Roster page
 
 Not a fixed slot count. Three N+1 auto-growing sections stacked in one scrollable
 page, each showing its current entries plus exactly one blank row to type a new
 one into -- never a fixed row count, and this supersedes the earlier "25 slots"
-fixed-row design:
+fixed-row design. An "Open pbar" button and a "Show pets in pbar" checkbox (writing the same
+`wants.petsEnabled` field as the Config page's pet toggle, spec 5.6/11.2) sit just below the
+profile switcher, above the scrollable sections.
 
 1. **Paladins** -- name, a delete-X sitting right after the name, tank flag,
-   optional and visually secondary spec hint field, and an Assign column
+   optional and visually secondary spec hint field, an Assign column
    auto-filled from a planning-time preview (the reference count table in 5.3,
    not the real solver -- it assumes Kings is available once there are 2+
    paladins, since actual capability isn't known until a paladin's own client
-   has scanned talents). Overridable per paladin; a red warning line appears
-   only when the override differs from the preview.
+   has scanned talents; overridable per paladin, a red warning line appears
+   only when the override differs from the preview), and an **Aura** column --
+   a direct pick (Clear, or one of `CBAB.AuraOrder`) with no auto-fill or
+   warning, since Auras are manual-only in v1 (spec 2). "Solve (plan)" copies
+   each paladin's Aura pick straight into `assignment.auras`; nothing solves it.
 2. **Tanks** -- name, delete-X, class, and up to 4 PreferredBuff dropdowns
    auto-filled from that class's want-list (5.5), overridable per tank.
 3. **Assignments** -- the assignment display and Solve/Push controls that used
@@ -762,6 +855,7 @@ TOC order is dependency order. Nothing reads a module loaded after it.
 ```
 Core.lua
 Data/Spells.lua
+Data/Auras.lua
 Data/ClassSpecs.lua
 Data/Defaults.lua
 DB.lua
@@ -805,6 +899,23 @@ CBAB.Blessings        -- [id] = { name, greaterIDs={}, normalIDs={}, texture, ta
 CBAB.BlessingOrder
 CBAB.WatchedSpellIDs
 ```
+
+### Data/Auras.lua
+Pure data, zero logic. Paladin Auras keyed by internal id: `devotion`, `retribution`,
+`concentration`, `sanctity`. Self-cast, no greater/normal split, so one `ids` rank list per entry
+instead of Data/Spells.lua's normalIDs/greaterIDs pair. Folds its spell IDs into the SAME
+`CBAB.WatchedSpellIDs` set Track.lua already scans (spec 9) -- an Aura is read off whichever
+tracked unit happens to be casting it, which for a self-buff is always that paladin's own unit,
+so Track.lua needs no separate scan path, only an extended reverse lookup (spec: "Cross-module
+contract" below).
+
+```lua
+CBAB.Auras             -- [id] = { name, ids={}, texture, talentGated }
+CBAB.AuraOrder
+```
+
+**HIGH RISK -- unverified** (see CHECKLIST.md): these rank ID lists were never confirmed against
+a live 2.5.6 client, same caveat as several of Data/Spells.lua's own IDs.
 
 The `texture` field is load-bearing — it is the key for the talent lookup in section 6.1.
 
@@ -885,7 +996,12 @@ CBAB.Comm:BroadcastSelf()
 CBAB.Comm:PushAssignment()
 CBAB.Comm:Hello()
 CBAB.Comm:EpochTable() -> {}
+CBAB.Comm:GroupChannel() -> "RAID" | "PARTY" | "INSTANCE_CHAT" | nil
 ```
+
+`GroupChannel` exposes the same channel-selection logic `Send`'s callers already use internally,
+so other modules (the pbar's Report button, UI/Bar.lua) can post to the right channel without
+duplicating the `IsInRaid`/`IsInGroup` check.
 
 ### Track.lua
 
@@ -896,6 +1012,18 @@ CBAB.Track:Missing() -> { {unit, blessing, assignedTo} }
 ```
 
 Owns the aura API shim. Emits `BUFF_STATE_CHANGED` at most once per flush.
+
+### Solve.lua
+Wires the pure solver to live game data via CBAB.Cap and CBAB.Roster, writing the result back
+through CBAB.DB.
+
+```lua
+CBAB.Solve:RunLive()          -- the live-data solve (spec 11.1), gated out of combat
+CBAB.Solve:ValidateCurrent()  -- re-validates the CURRENTLY STORED assignment, no re-solve
+```
+
+`RunLive` is the single code path behind both `/cbab solve` and the pbar's Solve button --
+neither wraps or duplicates the other's logic.
 
 ### UI/Bar.lua, UI/Alert.lua, UI/RosterPage.lua, UI/Config.lua
 See section 11. (The former `UI/Editor.lua` was removed -- 11.1 folded into the roster page.)
@@ -922,7 +1050,7 @@ Log ring buffer, `/cbab dump`, `/cbab perf` counters, `/cbab epoch`.
 | Roster | `ROSTER_CHANGED` | RosterPage, Track, Comm |
 | Capability | `CAPABILITY_CHANGED` | Comm, Bar, Alert |
 | Comm | `ASSIGNMENT_RECEIVED` | DB, Bar, Alert, RosterPage |
-| DB | `ASSIGNMENT_CHANGED` | Bar, Alert, Track, RosterPage |
+| DB, Solve, RosterPage, Bar | `ASSIGNMENT_CHANGED` | Bar, Alert, Track, RosterPage |
 | Track | `BUFF_STATE_CHANGED` | Bar, Alert |
 
 No module calls another module's internals. Only these messages and the public functions above.
@@ -981,6 +1109,9 @@ CBABuff/
 - `spellRank + talentPoints` capability scoring
 - Greater-on-class plus normal-override-on-tank as the conflict resolution pattern
 - The `/click` macro surface and button naming
+- The paladin-rows × class-columns grid layout itself (11.2, amended) -- adopted deliberately so
+  CBA Buff's pbar is a strict functional superset of PallyPower's main window, not a downgrade,
+  while keeping the coverage/duration/manual-override features PallyPower doesn't have
 
 Techniques deliberately rejected:
 
