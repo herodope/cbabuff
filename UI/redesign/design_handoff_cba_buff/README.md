@@ -17,7 +17,7 @@ The redesign is a **full modern dark reskin** (inspired by EllesmereUI — dark,
 | 1. Paladin bar ("Combat Strip") | **Done** — `UI/Bar.lua`, commit `288bc4a` on `main` |
 | Shared design system | **Done** — `UI/Theme.lua` |
 | 2. Roster window | **Done** — `UI/RosterPage.lua` |
-| 3. Config window | Not started — still the pre-redesign visuals |
+| 3. Config window | **Done** — `UI/Config.lua` |
 | 4. Alert window | Not started — still the pre-redesign visuals |
 
 **What shipped (pbar):** `UI/Bar.lua` was reworked to match this doc's Combat
@@ -78,7 +78,32 @@ a read-only summary of the same data. Rounded pill toggles/corners are still
 plain squares (Fidelity note, unchanged). None of this has been verified
 against a running client — see the Verification note below.
 
-**Next up:** pick one of Config / Alert and repeat the same approach
+**What shipped (Config):** `UI/Config.lua` was reworked onto `UI/Theme.lua`
+to match this doc's §3 Config window — window chrome, a 216px sidebar of
+five category nav buttons (dot + label, gold active state), and a content
+pane whose header + row list re-skins per category via a pooled set of
+generic row frames (one each of toggle/number-stepper/button/note controls,
+shown/hidden per row per the active category) rather than five separate
+static layouts. This is what fixes the pre-redesign single-column overflow.
+Every DB field each setting reads/writes is unchanged from the pre-redesign
+version; only frame creation/styling and the category split are new.
+Two decisions not spelled out in the HTML reference: "Open pbar" and
+"Preview alert" are each a label+description row with a short button
+control on the right (not a label-less row whose entire content is the
+button); and the four sections beyond Warnings (whose subtitle is in the
+screenshot) get this file's own one-line subtitle describing the category,
+since the HTML/README don't specify them. The footer's "Reset section"
+button restores only the ACTIVE category's own fields from
+`CBAB.Defaults` — it never touches other categories.
+
+**Known gaps / simplifications (Config):** rounded corners/pill toggles are
+still plain squares (Fidelity note, unchanged); the sidebar's border and the
+new content-header/footer dividers use the same single-edge-texture
+approach as `UI/RosterPage.lua`'s separators rather than a full backdrop
+border, to avoid stray edges the reference doesn't have. None of this has
+been verified against a running client — see the Verification note below.
+
+**Next up:** Alert window is the last surface — repeat the same approach
 (reskin via `UI/Theme.lua`, preserve all underlying Lua logic untouched,
 verify secure-attribute/combat-lockdown call sites weren't touched where
 applicable).
