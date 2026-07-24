@@ -32,9 +32,13 @@ CBAB.Defaults.db = {
 
 -- Shape of a fresh `CBABuffCharDB` (per character).
 CBAB.Defaults.char = {
-	schemaVersion = 1,
+	schemaVersion = 2,
 	ui = {
-		bar = { point = "CENTER", x = 0, y = -180, scale = 1.0, locked = false, compact = true, shown = true },
+		-- size: "minimized" | "compact" | "expanded" (UI/Bar.lua's chevron
+		-- cycle). `compact` (the old boolean) is kept only so DB.lua's v2
+		-- migration has something to read on characters who logged in before
+		-- this field existed -- it's otherwise unread.
+		bar = { point = "CENTER", x = 0, y = -180, scale = 1.0, locked = false, compact = true, size = "compact", shown = true },
 		alert = {
 			point = "CENTER", x = 0, y = 200, scale = 1.0, autoHide = true, hideInCombat = true,
 			-- Locked by default (spec: same "avoid an accidental drag mid-raid"

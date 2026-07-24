@@ -22,6 +22,8 @@ CBAB.Blessings = {
 		greaterIDs = { 25895 },
 		texture = "Interface\\Icons\\Spell_Holy_SealOfSalvation",
 		talentGated = false,
+		-- UI/Theme.lua's blessing color system (design handoff README.md).
+		color = "#E8629E",
 	},
 
 	kings = {
@@ -31,6 +33,7 @@ CBAB.Blessings = {
 		greaterIDs = { 25898 },
 		texture = "Interface\\Icons\\Spell_Magic_MageArmor",
 		talentGated = true,
+		color = "#8E7BE6",
 	},
 
 	might = {
@@ -42,6 +45,7 @@ CBAB.Blessings = {
 		-- Load-bearing (spec 6.1): Improved Blessing of Might shares this icon.
 		texture = "Interface\\Icons\\Spell_Holy_FistOfJustice",
 		talentGated = false,
+		color = "#E15A47",
 	},
 
 	wisdom = {
@@ -52,6 +56,7 @@ CBAB.Blessings = {
 		-- Load-bearing (spec 6.1): Improved Blessing of Wisdom shares this icon.
 		texture = "Interface\\Icons\\Spell_Holy_SealOfWisdom",
 		talentGated = false,
+		color = "#43A6E6",
 	},
 
 	light = {
@@ -62,6 +67,7 @@ CBAB.Blessings = {
 		greaterIDs = { 25890, 27145 },
 		texture = "Interface\\Icons\\Spell_Holy_PrayerOfHealing02",
 		talentGated = false,
+		color = "#E7BE4A",
 	},
 
 	sanctuary = {
@@ -71,6 +77,7 @@ CBAB.Blessings = {
 		greaterIDs = { 25899 },
 		texture = "Interface\\Icons\\Spell_Nature_LightningShield",
 		talentGated = true,
+		color = "#4FB477",
 	},
 }
 

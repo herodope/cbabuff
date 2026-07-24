@@ -790,9 +790,24 @@ local assignPushButton = CreateFrame("Button", nil, content, "UIPanelButtonTempl
 assignPushButton:SetSize(100, 22)
 assignPushButton:SetText("Push to raid")
 
+-- Sync (pull assignment) and Report (raid-chat summary) used to be pbar
+-- toolbar buttons. The redesigned Combat Strip (UI/Bar.lua) has no
+-- toolbar, so they live here now, next to Solve/Push -- same rail, same
+-- "coordinator plans here" spirit. Handlers are unchanged from the old
+-- pbar buttons, just relocated.
+local assignSyncButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+assignSyncButton:SetSize(56, 22)
+assignSyncButton:SetText("Sync")
+assignSyncButton:SetScript("OnClick", function() CBAB.Comm:Hello() end)
+
+local assignReportButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+assignReportButton:SetSize(64, 22)
+assignReportButton:SetText("Report")
+assignReportButton:SetScript("OnClick", function() CBAB.PostReport() end)
+
 local assignStatusText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 assignStatusText:SetJustifyH("LEFT")
-assignStatusText:SetWidth(CONTENT_WIDTH - 220)
+assignStatusText:SetWidth(CONTENT_WIDTH - 220 - 136)
 
 local assignRows = {}
 local function getAssignRow(i)
@@ -1152,8 +1167,12 @@ refreshAll = function()
 	assignSolveButton:SetPoint("TOPLEFT", content, "TOPLEFT", 6, y)
 	assignPushButton:ClearAllPoints()
 	assignPushButton:SetPoint("LEFT", assignSolveButton, "RIGHT", 8, 0)
+	assignSyncButton:ClearAllPoints()
+	assignSyncButton:SetPoint("LEFT", assignPushButton, "RIGHT", 8, 0)
+	assignReportButton:ClearAllPoints()
+	assignReportButton:SetPoint("LEFT", assignSyncButton, "RIGHT", 8, 0)
 	assignStatusText:ClearAllPoints()
-	assignStatusText:SetPoint("LEFT", assignPushButton, "RIGHT", 12, 0)
+	assignStatusText:SetPoint("LEFT", assignReportButton, "RIGHT", 12, 0)
 
 	local errorCount, warnCount = 0, 0
 	for _, f in ipairs(plannedValidation) do

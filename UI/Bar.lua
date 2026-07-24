@@ -1,16 +1,16 @@
 local ADDON, CBAB = ...
+local Theme = CBAB.Theme
 
 -- The paladin bar (pbar): a PallyPower-style grid, one row per paladin,
 -- one column per populated class plus Pets and Aura. Frame names
--- PallyPowerC1..PallyPowerC9 and PallyPowerRF are a hard compatibility
--- requirement (spec 11.2) -- existing raider macros click these names
--- directly. This is the ONLY place in the addon the PallyPower name
--- appears; every string a user reads says CBA Buff. Those compat-named
--- buttons ARE the local player's own row (row 1) -- every other paladin's
--- row uses ordinary, non-compat-named pooled frames.
+-- PallyPowerC1..PallyPowerC9 are a hard compatibility requirement
+-- (spec 11.2) -- existing raider macros click these names directly. This
+-- is the ONLY place in the addon the PallyPower name appears; every string
+-- a user reads says CBA Buff. Those compat-named buttons ARE the local
+-- player's own row (row 1) -- every other paladin's row uses ordinary,
+-- non-compat-named pooled frames.
 --
 --   /click PallyPowerC1 LeftButton Down    -> greater blessing on class 1
---   /click PallyPowerRF RightButton Down   -> seal
 --
 -- Class columns are compacted to only POPULATED classes in a fixed
 -- priority order (verified against PallyPower's own ClassID table for its
@@ -18,7 +18,24 @@ local ADDON, CBAB = ...
 -- Warlock, Shaman. So "C1" is whichever of those is the first class
 -- actually present in the raid, not a fixed class -- replicating this
 -- compaction is what makes an existing macro land on the right class.
+--
+-- Visual design: UI/redesign/design_handoff_cba_buff/README.md ("Combat
+-- Strip"). Righteous Fury/Seal tracking and the Solve/Sync/Report toolbar
+-- from the pre-redesign bar are gone per that spec -- RF/Seal has no
+-- replacement (README: "no RF or seal tracking"); Sync and Report moved to
+-- UI/RosterPage.lua's Solve rail, alongside Solve/Push. The bar itself now
+-- only has three visual states, cycled by one chevron (README §1: Combat
+-- Strip states 2a-2d):
+--   minimized -- status pill only (brand chip + dot + N/M or "K gaps")
+--   compact   -- row 1 only (your own castable buttons), 44x44 tiles
+--   expanded  -- every paladin's row, 38x38 tiles, others read-only
+-- persisted as CBABuffCharDB.ui.bar.size ("minimized"|"compact"|"expanded").
 local CLASS_PRIORITY = { "WARRIOR", "ROGUE", "PRIEST", "DRUID", "PALADIN", "HUNTER", "MAGE", "WARLOCK", "SHAMAN" }
+
+local CLASS_ABBR = {
+	WARRIOR = "WAR", ROGUE = "ROG", PRIEST = "PRI", DRUID = "DRU", PALADIN = "PAL",
+	HUNTER = "HUN", MAGE = "MAG", WARLOCK = "WLK", SHAMAN = "SHM",
+}
 
 -- ============================================================
 -- Secure attribute writes: ONLY legal out of combat. Every write in this
@@ -48,13 +65,11 @@ end)
 -- ============================================================
 -- Spell name resolution: secure `spellN` attributes want the spell's own
 -- name (any known rank), which auto-resolves to the CASTER'S OWN highest
--- known rank at cast time. This is what makes every grid cell safe to
--- click regardless of whose row it's under (see the click-semantics note
--- above the cell builders, below): the click always casts using the
--- CLICKING player's own spellbook, using whichever blessing/aura that
--- row's plan says belongs in that column. If the clicking player doesn't
--- know that spell, the cast is a silent no-op -- there is no way for one
--- client to cast as another player, full stop.
+-- known rank at cast time. This is what makes row 1's cells safe to click:
+-- the click always casts using the CLICKING player's own spellbook, using
+-- whichever blessing/aura row 1's plan says belongs in that column. If the
+-- clicking player doesn't know that spell, the cast is a silent no-op --
+-- there is no way for one client to cast as another player, full stop.
 -- ============================================================
 
 local function spellNameFor(blessingId, isGreater)
@@ -67,7 +82,7 @@ local function auraSpellNameFor(auraId)
 	return CBAB:GetSpellName(CBAB.Auras[auraId].ids[1])
 end
 
--- Class-colored, title-cased label for the persistent column-header text.
+-- Class-colored, title-cased label for tooltip text.
 local function classDisplayLabel(class)
 	local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
 	local displayName = class:sub(1, 1) .. class:sub(2):lower()
@@ -166,11 +181,6 @@ local function getTrackStateFor(unit)
 	return CBAB.Track:StateFor(unit)
 end
 
-local function getTrackMissing()
-	if debugMode then return {} end
-	return CBAB.Track:Missing()
-end
-
 -- Every paladin row lookup goes through this instead of CBAB.Roster:Paladins()
 -- directly, so debug mode's synthetic roster is respected consistently.
 local function getRosterPaladins()
@@ -235,8 +245,8 @@ local function unitRemaining(unit, blessingId)
 end
 
 -- Full-class coverage, NOT just the one representative unit the secure
--- attribute targets -- this is what the grid's green check means: every
--- live member of the class currently holds the blessing, from ANY caster.
+-- attribute targets -- this is what a green tile border means: every live
+-- member of the class currently holds the blessing, from ANY caster.
 local function classCoverage(class, blessingId)
 	local members = classMembers(class)
 	if #members == 0 or not blessingId then return false end
@@ -304,23 +314,6 @@ local function auraCoverage(paladinName, auraId)
 	return { complete = true, minRemaining = remaining }
 end
 
-local function syncStatusFor(paladinName)
-	if paladinName == UnitName("player") then return "self" end
-	local assignment = getAssignment()
-	local myEpoch = (assignment and assignment.epoch) or 0
-	local theirEpoch = CBAB.Comm:EpochTable()[paladinName]
-	if theirEpoch == nil then return "unknown" end
-	if theirEpoch >= myEpoch then return "synced" end
-	return "stale"
-end
-
-local SYNC_LABEL = {
-	self = "|cff888888(you)|r",
-	synced = "|cff33ff33sync: Y|r",
-	stale = "|cffff4444sync: N|r",
-	unknown = "|cff888888sync: ?|r",
-}
-
 -- Ordered row list: row 1 is always the local player (the compat-named
 -- buttons live there), followed by every other paladin found in the
 -- current plan or the live/synthetic roster, alphabetically.
@@ -348,6 +341,15 @@ local function paladinRowNames()
 	return names
 end
 
+local function petsDisplayEnabled()
+	local profile = CBAB.DB:Profile()
+	return profile ~= nil and profile.wants ~= nil and profile.wants.petsEnabled == true
+end
+
+-- Plain-text assignment summary for a paladin -- no longer shown inline on
+-- the row (the expanded row header is now name + tag only, per the
+-- reference design), but still needed for CBAB.PostReport's raid-chat
+-- lines and worth keeping as a single source of truth for that wording.
 local function paladinSummaryText(paladinName)
 	local assignment = getAssignment()
 	if not assignment then return "no assignment" end
@@ -376,86 +378,46 @@ local function paladinSummaryText(paladinName)
 	return text
 end
 
-local function petsDisplayEnabled()
-	local profile = CBAB.DB:Profile()
-	return profile ~= nil and profile.wants ~= nil and profile.wants.petsEnabled == true
-end
-
 -- ============================================================
 -- Frame creation. RegisterForClicks("AnyDown") is required for the
--- `/click X LeftButton Down` macro form the task's own examples use --
--- secure buttons don't respond to simulated Down clicks otherwise.
---
--- Classic/TBC frames can call SetBackdrop() directly without a
--- BackdropTemplate (that requirement is Legion+/retail only).
+-- `/click X LeftButton Down` macro form. Classic/TBC frames can call
+-- SetBackdrop() directly without a BackdropTemplate (that requirement is
+-- Legion+/retail only).
 -- ============================================================
 
 local bar = CreateFrame("Frame", "CBABuffBar", UIParent)
 bar:SetMovable(true)
 bar:SetResizable(false) -- resizing goes through the custom grip + SetScale, not native frame resize
 bar:SetClampedToScreen(true)
-CBAB:ApplyBackdrop(bar, {
-	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	edgeSize = 12,
-	insets = { left = 3, right = 3, top = 3, bottom = 3 },
-})
-bar:SetBackdropColor(0, 0, 0, 0.75)
+bar:EnableMouse(true)
+CBAB:ApplyBackdrop(bar, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+Theme.ApplyFill(bar, Theme.Colors.barFillTop, Theme.Colors.barFillBottom, 1)
+Theme.ApplyDropShadow(bar, { pad = 12, yOffset = 8, alpha = 0.5 })
+Theme.ApplyTopHairline(bar, Theme.Colors.gold)
 
-local PADDING = 8
-local TITLE_HEIGHT = 18
-local TOOLBAR_HEIGHT = 24
-local LABEL_HEIGHT = 12
-local NAME_ROW_HEIGHT = 14
-local SUMMARY_ROW_HEIGHT = 12
-local ROW_GAP = 2
-local ROW_BLOCK_GAP = 8
-local BUTTON_SIZE = 26
-local BUTTON_GAP = 4
-local TITLE_MIN_WIDTH = 170
-local RESIZE_GRIP_SIZE = 14
+local PADDING = 9
+local BRAND_CHIP_SIZE = 20
+local COMPACT_TILE = 44
+local EXPANDED_TILE = 38
+local BUTTON_GAP = 8
+local DIVIDER_WIDTH = 1
+local HEADER_ROW_HEIGHT = 15
+local NAME_ROW_HEIGHT = 15
+local TAG_ROW_HEIGHT = 11
+local ROW_BLOCK_GAP = 5
+local MANUAL_COLUMN_WIDTH = 60
+local RESIZE_GRIP_SIZE = 12
+local MIN_PILL_HEIGHT = 35
+local BRAND_CLUSTER_WIDTH = 26 -- fixed-width left column for the dot+"CBA" label (compact/expanded)
+local NAME_COL_WIDTH = 98
 
 -- ============================================================
--- Title row: drag handle + tooltip (spec 11.2's "summary lives in a
--- tooltip, not a page"), title text, Lock/Unlock, Close.
+-- Drag: the whole bar is the drag surface now (README: the old
+-- handle-square control is gone, "do not re-add" it). Buttons/cells
+-- layered on top still get first claim on mouse events, so this only
+-- fires from empty chrome -- the brand chip below gets it too, since it's
+-- a plain (non-Button) texture region and won't intercept the drag.
 -- ============================================================
-
-local titleBar = CreateFrame("Frame", nil, bar)
-titleBar:SetPoint("TOPLEFT", PADDING, -PADDING)
-titleBar:SetHeight(TITLE_HEIGHT)
-titleBar:EnableMouse(true)
-
-local titleText = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-titleText:SetPoint("LEFT", 14, 0)
-titleText:SetText("CBA Buff")
-
-local closeButton = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
-closeButton:SetSize(16, 16)
-closeButton:SetPoint("RIGHT", 0, 0)
-closeButton:SetScript("OnClick", function() CBAB.Bar_SetShown(false) end)
-
-local lockButton = CreateFrame("Button", nil, titleBar, "UIPanelButtonTemplate")
-lockButton:SetSize(44, 16)
-lockButton:SetPoint("RIGHT", closeButton, "LEFT", -4, 0)
-
-local function refreshChrome()
-	local locked = CBAB.DB:Char().ui.bar.locked
-	lockButton:SetText(locked and "Unlock" or "Lock")
-end
-CBAB.Bar_RefreshChrome = refreshChrome
-
-lockButton:SetScript("OnClick", function()
-	local charDB = CBAB.DB:Char()
-	charDB.ui.bar.locked = not charDB.ui.bar.locked
-	refreshChrome()
-end)
-
-local handle = CreateFrame("Button", nil, titleBar)
-handle:SetSize(10, TITLE_HEIGHT)
-handle:SetPoint("LEFT", 0, 0)
-handle.tex = handle:CreateTexture(nil, "ARTWORK")
-handle.tex:SetAllPoints()
-handle.tex:SetColorTexture(0.5, 0.5, 0.5, 0.6)
 
 local function startDrag()
 	if CBAB.DB:Char().ui.bar.locked then return end
@@ -469,14 +431,108 @@ local function stopDrag()
 	charDB.ui.bar.x = x
 	charDB.ui.bar.y = y
 end
+bar:RegisterForDrag("LeftButton")
+bar:SetScript("OnDragStart", startDrag)
+bar:SetScript("OnDragStop", stopDrag)
 
-titleBar:RegisterForDrag("LeftButton")
-titleBar:SetScript("OnDragStart", startDrag)
-titleBar:SetScript("OnDragStop", stopDrag)
+-- Kept for Config.lua's "Locked" checkbox, which calls this after flipping
+-- ui.bar.locked (spec: same lock wording/behaviour as before). The bar no
+-- longer has its own visible lock button, but the drag gate above still
+-- reads ui.bar.locked every time, so no visual refresh is actually needed
+-- here -- kept as a safe no-op so Config.lua's existing call never errors.
+function CBAB.Bar_RefreshChrome() end
 
 -- ============================================================
--- Resize grip: drag to change the bar's own scale (same value the
--- Config page's "Scale (%)" field edits, spec 11.5).
+-- Forward declarations: the chevron/brand chrome below needs these, but
+-- their real bodies aren't defined until after the row pool exists.
+-- ============================================================
+
+local refreshGridStructure, refreshAssignment, refreshVisualState
+
+-- ============================================================
+-- Brand cluster: chip + status dot + vertical "CBA" label (README §1,
+-- states 2a/2b/2d). WoW FontStrings can't rotate glyphs the way the
+-- reference's `writing-mode: vertical-rl` does, so the vertical label is
+-- approximated as three stacked lines instead of true rotated text.
+-- ============================================================
+
+local brandChip = CreateFrame("Frame", nil, bar)
+brandChip:SetSize(BRAND_CHIP_SIZE, BRAND_CHIP_SIZE)
+Theme.ApplyFill(brandChip, Theme.Colors.gold, Theme.Colors.goldDark, 0)
+brandChip:EnableMouse(true)
+brandChip:RegisterForDrag("LeftButton")
+brandChip:SetScript("OnDragStart", startDrag)
+brandChip:SetScript("OnDragStop", stopDrag)
+
+local statusDot = bar:CreateTexture(nil, "OVERLAY")
+statusDot:SetSize(8, 8)
+
+local cbaLabel = bar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(cbaLabel, "ColumnLabel", { color = "textFaint" })
+cbaLabel:SetJustifyH("CENTER")
+cbaLabel:SetText("C\nB\nA")
+cbaLabel:SetSpacing(1)
+
+local coverageText = bar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(coverageText, "ButtonLabel")
+
+local dividerA = bar:CreateTexture(nil, "ARTWORK")
+dividerA:SetWidth(DIVIDER_WIDTH)
+dividerA:SetColorTexture(Theme.Hex(Theme.Colors.divider))
+
+local dividerB = bar:CreateTexture(nil, "ARTWORK")
+dividerB:SetWidth(DIVIDER_WIDTH)
+dividerB:SetColorTexture(Theme.Hex(Theme.Colors.divider))
+
+brandChip:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+	GameTooltip:SetText("CBA Buff", 1, 1, 1)
+	if debugMode then
+		GameTooltip:AddLine("|cffff8800pbar debug mode|r", 1, 0.6, 0)
+	end
+	GameTooltip:Show()
+end)
+brandChip:SetScript("OnLeave", GameTooltip_Hide)
+
+-- ============================================================
+-- Chevron: cycles minimized -> compact -> expanded -> minimized.
+-- ============================================================
+
+local SIZE_CYCLE = { minimized = "compact", compact = "expanded", expanded = "minimized" }
+local SIZE_TOOLTIP = { minimized = "Minimized", compact = "Your casts", expanded = "Expanded -- all paladins" }
+
+local function currentSize()
+	return CBAB.DB:Char().ui.bar.size or "compact"
+end
+
+local chevronButton = CreateFrame("Button", nil, bar)
+CBAB:ApplyBackdrop(chevronButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+chevronButton:SetBackdropColor(Theme.Hex(Theme.Colors.controlFill))
+chevronButton:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+local chevronText = chevronButton:CreateFontString(nil, "OVERLAY")
+chevronText:SetPoint("CENTER")
+Theme.StyleText(chevronText, "ButtonLabel", { color = "textSecondary" })
+chevronText:SetText("v")
+Theme.ApplyInteractionState(chevronButton, chevronButton)
+
+chevronButton:SetScript("OnClick", function()
+	local charDB = CBAB.DB:Char()
+	charDB.ui.bar.size = SIZE_CYCLE[currentSize()] or "compact"
+	refreshGridStructure()
+	refreshAssignment()
+	refreshVisualState()
+end)
+chevronButton:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText(SIZE_TOOLTIP[currentSize()] or "Combat Strip")
+	GameTooltip:AddLine("Click to cycle size", 0.7, 0.7, 0.7)
+	GameTooltip:Show()
+end)
+chevronButton:SetScript("OnLeave", GameTooltip_Hide)
+
+-- ============================================================
+-- Resize grip: drag to change the bar's own scale (same value Config's
+-- "Scale (%)" field edits).
 -- ============================================================
 
 local resizeGrip = CreateFrame("Button", nil, bar)
@@ -505,105 +561,40 @@ resizeGrip:SetScript("OnUpdate", function(self)
 end)
 
 -- ============================================================
--- Toolbar row: Solve (live-data solve, spec 11.1), Sync (manual HELLO
--- request/pull, spec 8), Report (raid-chat summary, spec 11.4 "manual
--- button, never automatic"), plus the RF/Seal button and the "cast next
--- needed" button -- both single per-player utilities, not part of the
--- per-class grid, so they live here rather than inside any paladin's row.
--- Static row, laid out once at creation -- never needs a per-refresh pass.
--- ============================================================
-
-local toolbarAnchor = CreateFrame("Frame", nil, bar)
-toolbarAnchor:SetSize(1, 1)
-toolbarAnchor:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, -ROW_GAP)
-
-local solveButton = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
-solveButton:SetSize(64, TOOLBAR_HEIGHT - 4)
-solveButton:SetText("Solve")
-solveButton:SetPoint("TOPLEFT", toolbarAnchor, "TOPLEFT", 0, 0)
-solveButton:SetScript("OnClick", function()
-	if debugMode then
-		CBAB:Print("pbar debug mode is on -- /cbab pbar to turn it off before solving live data")
-		return
-	end
-	CBAB.Solve:RunLive()
-end)
-
-local syncButton = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
-syncButton:SetSize(56, TOOLBAR_HEIGHT - 4)
-syncButton:SetText("Sync")
-syncButton:SetPoint("LEFT", solveButton, "RIGHT", 4, 0)
-syncButton:SetScript("OnClick", function() CBAB.Comm:Hello() end)
-
-local reportButton = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
-reportButton:SetSize(64, TOOLBAR_HEIGHT - 4)
-reportButton:SetText("Report")
-reportButton:SetPoint("LEFT", syncButton, "RIGHT", 4, 0)
-
-local rfButton = CreateFrame("Button", "PallyPowerRF", bar, "SecureActionButtonTemplate")
-rfButton:RegisterForClicks("AnyDown")
-rfButton:SetSize(BUTTON_SIZE, BUTTON_SIZE)
-rfButton:SetPoint("LEFT", reportButton, "RIGHT", 10, 0)
-rfButton.icon = rfButton:CreateTexture(nil, "ARTWORK")
-rfButton.icon:SetAllPoints()
-rfButton.icon:SetTexture(CBAB:GetSpellIcon(25780)) -- Righteous Fury's own icon, not guessed
-CBAB:ApplyBackdrop(rfButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
-rfButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-
--- Righteous Fury (left) / Seal of the assigned type (right), both on self.
-setAttributeSafe(rfButton, "type1", "spell")
-setAttributeSafe(rfButton, "spell1", CBAB:GetSpellName(25780)) -- Righteous Fury
-setAttributeSafe(rfButton, "unit1", "player")
-setAttributeSafe(rfButton, "type2", "spell")
-setAttributeSafe(rfButton, "unit2", "player")
--- spell2 (seal) is deliberately left unset: which seal a paladin wants is
--- a per-character choice, not fixed reference data like Righteous Fury,
--- and there's no config UI yet to ask.
-
-local nextButton = CreateFrame("Button", "CBABuffNextButton", bar, "SecureActionButtonTemplate")
-nextButton:RegisterForClicks("AnyDown")
-nextButton:SetSize(BUTTON_SIZE, BUTTON_SIZE)
-nextButton:SetPoint("LEFT", rfButton, "RIGHT", 4, 0)
-nextButton.icon = nextButton:CreateTexture(nil, "ARTWORK")
-nextButton.icon:SetAllPoints()
-CBAB:ApplyBackdrop(nextButton, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
-nextButton:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-
--- Measured once (static row) for the width floor layoutGrid() uses below.
-local TOOLBAR_CONTENT_WIDTH = 268
-
--- ============================================================
--- Grid anchor: everything below the toolbar row is laid out fresh on
--- every refresh pass (row count and column count both change), using an
--- absolute cursor from this anchor rather than sibling-relative chains --
--- the same style UI/RosterPage.lua uses for its own growing sections.
+-- Grid anchor: everything below the brand cluster is laid out fresh on
+-- every refresh pass (row count, column count, and tile size all change
+-- with state), using an absolute cursor from this anchor.
 -- ============================================================
 
 local gridAnchor = CreateFrame("Frame", nil, bar)
 gridAnchor:SetSize(1, 1)
-gridAnchor:SetPoint("TOPLEFT", toolbarAnchor, "TOPLEFT", 0, -(TOOLBAR_HEIGHT + ROW_GAP))
 
-local WARN_COLOR = { 1, 0.6, 0, 1 }
-local MISSING_COLOR = { 0.9, 0.1, 0.1, 1 }
-local GOOD_COLOR = { 0.1, 0.8, 0.1, 1 }
-local NEUTRAL_COLOR = { 0.4, 0.4, 0.4, 1 }
+local STATUS_GOOD = "teal"
+local STATUS_WARN = "gold"
+local STATUS_MISSING = "red"
+local STATUS_NEUTRAL = "borderControlAlt"
+
+local function statusColor(key)
+	if key == "teal" then return Theme.Hex(Theme.Colors.teal) end
+	if key == "gold" then return Theme.Hex(Theme.Colors.gold) end
+	if key == "red" then return Theme.Hex(Theme.Colors.red) end
+	return Theme.Hex(Theme.Colors[key])
+end
 
 -- ============================================================
 -- Cell builder: one secure button per (row, column). Click semantics --
--- class cells are nocombat-gated macros (spec 11.2, same as the original
--- single-row design); pets/aura cells are plain spell attributes, always
--- clickable like the popout/next buttons, since they're single-target or
--- self-target rather than class-wide. Every cell, in every row, casts
--- using the CLICKING player's own spellbook (see the spellNameFor comment
--- above) -- the row it's under only determines WHICH blessing/aura gets
--- requested, never who casts it.
---
--- A small non-secure "edit" overlay sits on top of every cell, hidden by
--- default. A paladin row's Manual checkbox shows it for that row's cells;
--- while shown it captures the click instead of the secure button
--- underneath (a separate, always-insecure sibling frame, not a branch in
--- the secure button's own script -- the only safe way to make a secure
--- button's click behaviour conditional without tainting it).
+-- class cells are nocombat-gated macros (spec 11.2, same as before);
+-- pets/aura cells are plain spell attributes, always clickable like the
+-- popout buttons, since they're single-target or self-target rather than
+-- class-wide. Every LIVE cell (row 1, or any row while expanded is self)
+-- casts using the CLICKING player's own spellbook (see spellNameFor above)
+-- -- the row only determines WHICH blessing/aura gets requested, never who
+-- casts it. Non-self rows in the expanded view are read-only coverage
+-- (README: "only Bakalmao (you) is clickable") -- their cells still show
+-- real status/tooltip, but never receive spell/macro attributes, so a
+-- click on them is a harmless no-op. That's the one functional change
+-- from the pre-redesign grid, where every row's cells cast identically
+-- regardless of whose row it was under.
 -- ============================================================
 
 local cellSerial = 0
@@ -638,14 +629,6 @@ end
 -- but is kept next to the row code it serves for readability).
 local openGridEdit
 
--- Forward-declared: refreshVisualState is defined much further down (it
--- needs the row pool to exist first), but every cell -- created here, well
--- before that -- needs to call it on a shift-click (spec 11.2's
--- force-refresh). Bound once per cell at CREATION time via this upvalue
--- rather than in a one-off loop over gridRows after the fact, which would
--- silently miss every row created later through getGridRow().
-local refreshVisualState
-
 local function bindShiftRefresh(cell)
 	cell:HookScript("OnClick", function(self, mouseButton)
 		if IsShiftKeyDown() then
@@ -671,17 +654,18 @@ end
 
 -- kind: "class" | "pets" | "aura". Pooled (never destroyed), pooling
 -- naming uses a running serial rather than PallyPower-reserved names --
--- compat is scoped to the C1-C9/RF set only (spec 11.2).
+-- compat is scoped to the C1-C9 set only (spec 11.2).
 local function createCell(parent, kind)
 	cellSerial = cellSerial + 1
 	local btn = CreateFrame("Button", "CBABuffGridCell" .. cellSerial, parent, "SecureActionButtonTemplate")
 	btn:RegisterForClicks("AnyDown")
-	btn:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 	btn.icon = btn:CreateTexture(nil, "ARTWORK")
-	btn.icon:SetAllPoints()
+	btn.icon:SetPoint("TOPLEFT", 3, -3)
+	btn.icon:SetPoint("BOTTOMRIGHT", -3, 3)
 	btn.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
-	btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	btn:SetBackdropColor(Theme.HexA(Theme.Colors.tileDark, 0.5))
+	btn:SetBackdropBorderColor(statusColor(STATUS_NEUTRAL))
 	btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
 	btn.cooldown:SetAllPoints()
 	btn.cooldown:SetHideCountdownNumbers(false)
@@ -689,42 +673,40 @@ local function createCell(parent, kind)
 	attachTooltip(btn)
 	attachEditOverlay(btn, kind)
 	bindShiftRefresh(btn)
+	Theme.ApplyInteractionState(btn, btn.icon)
 	return btn
 end
 
 -- ============================================================
 -- Row 1 -- the local player. Class cells MUST be the PallyPowerC1..9
 -- compat buttons (spec 11.2); pets/aura cells are ordinary pooled cells.
--- Row 1 additionally keeps the original single-row popout behaviour
--- (single-target buttons on hover) that predates the grid -- see
--- CBAB.Bar_ShowPopout further down -- so its class cells get their OWN
--- OnEnter/OnLeave instead of attachTooltip's generic one.
+-- Row 1 additionally keeps the popout behaviour (single-target buttons on
+-- hover) -- see CBAB.Bar_ShowPopout further down -- so its class cells get
+-- their OWN OnEnter/OnLeave instead of attachTooltip's generic one.
 -- ============================================================
 
 local classButtons = {}
 for i = 1, 9 do
 	local btn = CreateFrame("Button", "PallyPowerC" .. i, bar, "SecureActionButtonTemplate")
 	btn:RegisterForClicks("AnyDown")
-	btn:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 
 	btn.icon = btn:CreateTexture(nil, "ARTWORK")
-	btn.icon:SetAllPoints()
+	btn.icon:SetPoint("TOPLEFT", 3, -3)
+	btn.icon:SetPoint("BOTTOMRIGHT", -3, 3)
 	btn.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
-	btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	btn:SetBackdropColor(Theme.HexA(Theme.Colors.tileDark, 0.5))
+	btn:SetBackdropBorderColor(statusColor(STATUS_NEUTRAL))
 
 	btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
 	btn.cooldown:SetAllPoints()
 	btn.cooldown:SetHideCountdownNumbers(false)
 
-	-- Column header: class name, always visible, sits just above the button.
-	btn.classLabel = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	btn.classLabel:SetPoint("BOTTOM", btn, "TOP", 0, 1)
-
 	attachCheckmark(btn)
 	attachEditOverlay(btn, "class")
 	bindShiftRefresh(btn)
+	Theme.ApplyInteractionState(btn, btn.icon)
 
 	btn:SetScript("OnEnter", function(self) CBAB.Bar_ShowPopout(self) end)
 	btn:SetScript("OnLeave", function(self) CBAB.Bar_ScheduleHidePopout(self) end)
@@ -733,36 +715,62 @@ for i = 1, 9 do
 end
 
 local selfPetsCell = createCell(bar, "pets")
-selfPetsCell.classLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-selfPetsCell.classLabel:SetPoint("BOTTOM", selfPetsCell, "TOP", 0, 1)
-selfPetsCell.classLabel:SetText("Pets")
-
 local selfAuraCell = createCell(bar, "aura")
-selfAuraCell.classLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-selfAuraCell.classLabel:SetPoint("BOTTOM", selfAuraCell, "TOP", 0, 1)
-selfAuraCell.classLabel:SetText("Aura")
+
+-- Shared class-header row (expanded state only, README §2d): one
+-- FontString per populated column, pooled by index like everything else.
+local classHeaderLabels = {}
+local function getClassHeaderLabel(index)
+	local fs = classHeaderLabels[index]
+	if not fs then
+		fs = bar:CreateFontString(nil, "OVERLAY")
+		Theme.StyleText(fs, "ColumnLabel")
+		fs:SetJustifyH("CENTER")
+		classHeaderLabels[index] = fs
+	end
+	return fs
+end
+
+-- Small persistent column labels above the Pets/Aura cells (this addon's
+-- own extension beyond the pure reference design, which has no pet/aura
+-- concept) -- kept in both compact and expanded states so the column is
+-- still identifiable without the full class-header row.
+local petsLabel = bar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(petsLabel, "ColumnLabel", { color = "textFaint" })
+petsLabel:SetText("PETS")
+local auraLabel = bar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(auraLabel, "ColumnLabel", { color = "textFaint" })
+auraLabel:SetText("AURA")
 
 -- ============================================================
--- Row header widgets: name + sync indicator, assignment summary line, and
--- the per-row Manual-override checkbox. Shared builder for row 1 and
--- every pooled row below it.
+-- Row header widgets: name + tag, assignment summary line, and the
+-- per-row Manual-override checkbox. Only shown in the expanded state
+-- (README: the compact "your casts" pill has no room/need for them --
+-- it's just tiles). Shared builder for row 1 and every pooled row below.
 -- ============================================================
 
 local function createRowHeader(parent)
-	local nameText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local nameText = parent:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(nameText, "Name")
 	nameText:SetJustifyH("LEFT")
 
-	local summaryText = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	local tagText = parent:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(tagText, "ColumnLabel", { color = "textFaint" })
+	tagText:SetJustifyH("LEFT")
+
+	local summaryText = parent:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(summaryText, "Body", { color = "textMuted" })
 	summaryText:SetJustifyH("LEFT")
 	summaryText:SetWordWrap(false)
 
 	local manualButton = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
 	manualButton:SetSize(16, 16)
 
-	local manualLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	local manualLabel = parent:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(manualLabel, "ColumnLabel", { color = "textFaint" })
 	manualLabel:SetText("manual")
 
-	return nameText, summaryText, manualButton, manualLabel
+	return nameText, tagText, summaryText, manualButton, manualLabel
 end
 
 -- ============================================================
@@ -775,13 +783,14 @@ end
 
 -- Whether the local viewer is allowed to toggle Manual for this row: any
 -- paladin may edit their OWN assignment (spec 8's "local override" right),
--- while editing someone ELSE's row is a coordinator-only plan edit.
+-- while editing someone ELSE's row is a coordinator-only plan edit. Manual
+-- editing is only ever offered in the expanded state (see refreshGridStructure).
 local function canEditRow(row)
 	return row.paladinName == UnitName("player") or CBAB:Mode().coordinator
 end
 
-local function applyManualVisibility(row)
-	local show = row.manualMode and canEditRow(row)
+local function applyManualVisibility(row, expanded)
+	local show = expanded and row.manualMode and canEditRow(row)
 	for _, cell in pairs(row.cells) do
 		if cell.editOverlay then cell.editOverlay:SetShown(show) end
 	end
@@ -790,7 +799,7 @@ end
 local function bindManualToggle(row)
 	row.manualButton:SetScript("OnClick", function(self)
 		row.manualMode = self:GetChecked() and true or false
-		applyManualVisibility(row)
+		applyManualVisibility(row, currentSize() == "expanded")
 	end)
 end
 
@@ -798,7 +807,7 @@ local row1 = { cells = {} }
 for i = 1, 9 do row1.cells[i] = classButtons[i] end
 row1.cells.pets = selfPetsCell
 row1.cells.aura = selfAuraCell
-row1.nameText, row1.summaryText, row1.manualButton, row1.manualLabel = createRowHeader(bar)
+row1.nameText, row1.tagText, row1.summaryText, row1.manualButton, row1.manualLabel = createRowHeader(bar)
 bindManualToggle(row1)
 
 local gridRows = { [1] = row1 }
@@ -808,7 +817,7 @@ local function createGridRow(index)
 	for i = 1, 9 do row.cells[i] = createCell(bar, "class") end
 	row.cells.pets = createCell(bar, "pets")
 	row.cells.aura = createCell(bar, "aura")
-	row.nameText, row.summaryText, row.manualButton, row.manualLabel = createRowHeader(bar)
+	row.nameText, row.tagText, row.summaryText, row.manualButton, row.manualLabel = createRowHeader(bar)
 	bindManualToggle(row)
 	return row
 end
@@ -896,11 +905,23 @@ openGridEdit = function(anchorFrame, paladinName, kind, class)
 end
 
 -- ============================================================
--- Assignment pass: secure attributes + icon + editOverlay targeting, for
--- every cell in every active row. Class buttons must be blocked in combat
--- (spec 11.2, `[nocombat]`); pets/aura cells stay castable in combat, same
--- as the popout/next buttons (they're single/self-target, not class-wide).
+-- Assignment pass: secure attributes + icon + tinted fill + editOverlay
+-- targeting, for every cell in every active row. Class buttons must be
+-- blocked in combat (spec 11.2, `[nocombat]`); pets/aura cells stay
+-- castable in combat, same as the popout buttons (they're single/self-
+-- target, not class-wide). `isLive` gates whether real spell/macro
+-- attributes get written at all -- false for every non-self row in the
+-- expanded state (see the cell-builder comment above for why).
 -- ============================================================
+
+local function applyBlessingFill(cell, blessingId)
+	local tint = blessingId and Theme.BlessingTint(blessingId)
+	if tint then
+		cell:SetBackdropColor(tint.fill[1], tint.fill[2], tint.fill[3], 1)
+	else
+		cell:SetBackdropColor(Theme.HexA(Theme.Colors.tileDark, 0.5))
+	end
+end
 
 local function buildClassMacro(spellName, unit)
 	if not spellName or not unit then
@@ -909,48 +930,73 @@ local function buildClassMacro(spellName, unit)
 	return ("/cast [nocombat,@%s] %s"):format(unit, spellName)
 end
 
-local function setClassCell(cell, paladinName, class)
+local function setClassCell(cell, paladinName, class, isLive)
 	local assignment = getAssignment()
 	local blessing = assignment and assignment.greaters[paladinName] and assignment.greaters[paladinName][class]
 	cell.assignedKey = blessing
 	cell.icon:SetTexture(blessing and CBAB.Blessings[blessing].texture or nil)
+	applyBlessingFill(cell, blessing)
 
-	local unit = representativeUnit(class)
-	setAttributeSafe(cell, "type1", "macro")
-	setAttributeSafe(cell, "macrotext1", buildClassMacro(blessing and spellNameFor(blessing, true), unit))
-	setAttributeSafe(cell, "type2", "macro")
-	setAttributeSafe(cell, "macrotext2", buildClassMacro(blessing and spellNameFor(blessing, false), "target"))
+	if isLive then
+		local unit = representativeUnit(class)
+		setAttributeSafe(cell, "type1", "macro")
+		setAttributeSafe(cell, "macrotext1", buildClassMacro(blessing and spellNameFor(blessing, true), unit))
+		setAttributeSafe(cell, "type2", "macro")
+		setAttributeSafe(cell, "macrotext2", buildClassMacro(blessing and spellNameFor(blessing, false), "target"))
+	else
+		setAttributeSafe(cell, "type1", nil)
+		setAttributeSafe(cell, "macrotext1", nil)
+		setAttributeSafe(cell, "type2", nil)
+		setAttributeSafe(cell, "macrotext2", nil)
+	end
 
 	cell.editOverlay.paladinName = paladinName
 	cell.editOverlay.class = class
 end
 
-local function setPetsCell(cell, paladinName)
+local function setPetsCell(cell, paladinName, isLive)
 	local coverage = petCoverage(paladinName)
 	local blessing = coverage and coverage.blessing
 	cell.assignedKey = blessing
 	cell.icon:SetTexture(blessing and CBAB.Blessings[blessing].texture or nil)
+	applyBlessingFill(cell, blessing)
 
-	local firstPet = petOverridesFor(paladinName)[1]
-	setAttributeSafe(cell, "type1", "spell")
-	setAttributeSafe(cell, "spell1", blessing and spellNameFor(blessing, false) or nil)
-	setAttributeSafe(cell, "unit1", firstPet and firstPet.target or nil)
-	setAttributeSafe(cell, "type2", "spell")
-	setAttributeSafe(cell, "spell2", blessing and spellNameFor(blessing, false) or nil)
-	setAttributeSafe(cell, "unit2", "target")
+	if isLive then
+		local firstPet = petOverridesFor(paladinName)[1]
+		setAttributeSafe(cell, "type1", "spell")
+		setAttributeSafe(cell, "spell1", blessing and spellNameFor(blessing, false) or nil)
+		setAttributeSafe(cell, "unit1", firstPet and firstPet.target or nil)
+		setAttributeSafe(cell, "type2", "spell")
+		setAttributeSafe(cell, "spell2", blessing and spellNameFor(blessing, false) or nil)
+		setAttributeSafe(cell, "unit2", "target")
+	else
+		setAttributeSafe(cell, "type1", nil)
+		setAttributeSafe(cell, "spell1", nil)
+		setAttributeSafe(cell, "unit1", nil)
+		setAttributeSafe(cell, "type2", nil)
+		setAttributeSafe(cell, "spell2", nil)
+		setAttributeSafe(cell, "unit2", nil)
+	end
 
 	cell.editOverlay.paladinName = paladinName
 end
 
-local function setAuraCell(cell, paladinName)
+local function setAuraCell(cell, paladinName, isLive)
 	local assignment = getAssignment()
 	local auraId = assignment and (assignment.auras or {})[paladinName]
 	cell.assignedKey = auraId
 	cell.icon:SetTexture(auraId and CBAB.Auras[auraId].texture or nil)
+	applyBlessingFill(cell, nil) -- auras have no blessing color; keep the neutral tile look
 
-	setAttributeSafe(cell, "type1", "spell")
-	setAttributeSafe(cell, "spell1", auraId and auraSpellNameFor(auraId) or nil)
-	setAttributeSafe(cell, "unit1", "player")
+	if isLive then
+		setAttributeSafe(cell, "type1", "spell")
+		setAttributeSafe(cell, "spell1", auraId and auraSpellNameFor(auraId) or nil)
+		setAttributeSafe(cell, "unit1", "player")
+	else
+		setAttributeSafe(cell, "type1", nil)
+		setAttributeSafe(cell, "spell1", nil)
+		setAttributeSafe(cell, "unit1", nil)
+	end
 
 	cell.editOverlay.paladinName = paladinName
 end
@@ -959,33 +1005,39 @@ end
 -- below and read here every assignment/visual pass.
 local currentLayout = {}
 
-local function refreshAssignment()
+refreshAssignment = function()
+	local myName = UnitName("player")
+	local expanded = currentSize() == "expanded"
 	for index, row in pairs(gridRows) do
 		if row.paladinName then
+			local isLive = (row.paladinName == myName) or not expanded
 			for slot, class in pairs(currentLayout) do
-				setClassCell(row.cells[slot], row.paladinName, class)
+				setClassCell(row.cells[slot], row.paladinName, class, isLive)
 			end
-			setPetsCell(row.cells.pets, row.paladinName)
-			setAuraCell(row.cells.aura, row.paladinName)
+			setPetsCell(row.cells.pets, row.paladinName, isLive)
+			setAuraCell(row.cells.aura, row.paladinName, isLive)
 		end
 	end
 end
 
 -- ============================================================
--- Visual pass: border colour (missing/expiring/good -- never a filled
--- background, per spec 11.2), the green check overlay (spec: full-class
--- coverage, not just the one representative unit the secure attribute
--- targets), the Cooldown swipe/timer, and tooltip text.
+-- Visual pass: border colour (missing/expiring/good, layered over the
+-- blessing-tinted fill the assignment pass just set), the green check
+-- overlay (full-class coverage, not just the one representative unit the
+-- secure attribute targets), the Cooldown swipe/timer, and tooltip text.
+-- Also tallies the minimized-state coverage pill from row 1's cells.
 -- ============================================================
 
+local minimizedTotal, minimizedCovered = 0, 0
+
 local function clearCellVisual(cell)
-	cell:SetBackdropBorderColor(unpack(NEUTRAL_COLOR))
+	cell:SetBackdropBorderColor(statusColor(STATUS_NEUTRAL))
 	cell.cooldown:Clear()
 	cell.checkTex:Hide()
 	cell.tooltipLines = nil
 end
 
-local function applyClassVisual(cell, paladinName, class)
+local function applyClassVisual(cell, paladinName, class, isSelf)
 	local blessing = cell.assignedKey
 	if not blessing then
 		clearCellVisual(cell)
@@ -995,6 +1047,10 @@ local function applyClassVisual(cell, paladinName, class)
 
 	local complete = classCoverage(class, blessing)
 	cell.checkTex:SetShown(complete)
+	if isSelf then
+		minimizedTotal = minimizedTotal + 1
+		if complete then minimizedCovered = minimizedCovered + 1 end
+	end
 
 	local threshold = (CBAB.DB:Char().warnings or {}).threshold or 120
 	local unit = representativeUnit(class)
@@ -1002,15 +1058,15 @@ local function applyClassVisual(cell, paladinName, class)
 	local statusLine
 
 	if not record then
-		cell:SetBackdropBorderColor(unpack(MISSING_COLOR))
+		cell:SetBackdropBorderColor(statusColor(STATUS_MISSING))
 		cell.cooldown:Clear()
 		statusLine = "missing"
 	else
 		local remaining = (record.expires or 0) - GetTime()
 		if remaining <= threshold then
-			cell:SetBackdropBorderColor(unpack(WARN_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_WARN))
 		else
-			cell:SetBackdropBorderColor(unpack(GOOD_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_GOOD))
 		end
 		if record.expires then
 			local duration = record.isGreater and 1800 or 600
@@ -1039,13 +1095,13 @@ local function applyPetsVisual(cell, paladinName)
 	local threshold = (CBAB.DB:Char().warnings or {}).threshold or 120
 
 	if not coverage.minRemaining then
-		cell:SetBackdropBorderColor(unpack(MISSING_COLOR))
+		cell:SetBackdropBorderColor(statusColor(STATUS_MISSING))
 		cell.cooldown:Clear()
 	else
 		if coverage.minRemaining <= threshold then
-			cell:SetBackdropBorderColor(unpack(WARN_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_WARN))
 		else
-			cell:SetBackdropBorderColor(unpack(GOOD_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_GOOD))
 		end
 		cell.cooldown:SetCooldown(GetTime() + coverage.minRemaining - 600, 600)
 	end
@@ -1071,19 +1127,19 @@ local function applyAuraVisual(cell, paladinName)
 
 	local statusLine
 	if not coverage.complete then
-		cell:SetBackdropBorderColor(unpack(MISSING_COLOR))
+		cell:SetBackdropBorderColor(statusColor(STATUS_MISSING))
 		cell.cooldown:Clear()
 		statusLine = "not active"
 	elseif coverage.indefinite then
-		cell:SetBackdropBorderColor(unpack(GOOD_COLOR))
+		cell:SetBackdropBorderColor(statusColor(STATUS_GOOD))
 		cell.cooldown:Clear()
 		statusLine = "active (no fixed duration)"
 	else
 		local threshold = (CBAB.DB:Char().warnings or {}).threshold or 120
 		if coverage.minRemaining <= threshold then
-			cell:SetBackdropBorderColor(unpack(WARN_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_WARN))
 		else
-			cell:SetBackdropBorderColor(unpack(GOOD_COLOR))
+			cell:SetBackdropBorderColor(statusColor(STATUS_GOOD))
 		end
 		statusLine = ("%ds remaining"):format(math.max(0, math.floor(coverage.minRemaining)))
 	end
@@ -1091,26 +1147,64 @@ local function applyAuraVisual(cell, paladinName)
 	cell.tooltipLines = { paladinName .. " -> Aura", CBAB.Auras[auraId].name, statusLine }
 end
 
+-- Updates the coverage pill's text/color/border and, when the bar is
+-- actually in the minimized state, its width -- called from both
+-- refreshGridStructure (initial layout) and refreshVisualState (every
+-- BUFF_STATE_CHANGED tick). Doing the resize here rather than only in
+-- refreshGridStructure matters because BUFF_STATE_CHANGED -- a buff
+-- falling off mid-raid, changing "8/8" to "1 gap" -- only calls
+-- refreshVisualState, not the full structure pass; without this, the pill
+-- would show stale/clipped text width until the next roster or assignment
+-- change happened to also fire.
+local function refreshCoveragePill()
+	local gaps = minimizedTotal - minimizedCovered
+	if minimizedTotal == 0 then
+		coverageText:SetText("--")
+		coverageText:SetTextColor(Theme.C("textFaint"))
+		statusDot:SetColorTexture(Theme.Hex(Theme.Colors.textFaint))
+	elseif gaps == 0 then
+		coverageText:SetText(("%d/%d"):format(minimizedCovered, minimizedTotal))
+		coverageText:SetTextColor(Theme.C("tealText"))
+		statusDot:SetColorTexture(Theme.Hex(Theme.Colors.teal))
+	else
+		coverageText:SetText(("%d gap%s"):format(gaps, gaps == 1 and "" or "s"))
+		coverageText:SetTextColor(Theme.C("redText"))
+		statusDot:SetColorTexture(Theme.Hex(Theme.Colors.red))
+	end
+	bar:SetBackdropBorderColor(Theme.Hex(gaps > 0 and Theme.Colors.borderGaps or Theme.Colors.borderControl))
+
+	if currentSize() == "minimized" then
+		local contentWidth = PADDING + BRAND_CHIP_SIZE + 8 + 8 + 8 + coverageText:GetStringWidth()
+			+ 8 + DIVIDER_WIDTH + 8 + 24 + PADDING
+		bar:SetSize(contentWidth, MIN_PILL_HEIGHT)
+	end
+end
+
 -- Assigns the upvalue forward-declared above (bindShiftRefresh already
 -- closes over it), rather than `local function`, which would create a
 -- second, shadowing local instead of filling in the forward reference.
 refreshVisualState = function()
+	local myName = UnitName("player")
+	minimizedTotal, minimizedCovered = 0, 0
 	for index, row in pairs(gridRows) do
 		if row.paladinName then
+			local isSelf = row.paladinName == myName
 			for slot, class in pairs(currentLayout) do
-				applyClassVisual(row.cells[slot], row.paladinName, class)
+				applyClassVisual(row.cells[slot], row.paladinName, class, isSelf)
 			end
 			applyPetsVisual(row.cells.pets, row.paladinName)
 			applyAuraVisual(row.cells.aura, row.paladinName)
 		end
 	end
+	refreshCoveragePill()
 end
 
 -- ============================================================
 -- Structure pass: which paladins get a row, which classes get a column,
--- and the full top-to-bottom / left-to-right layout. Runs on both
--- ROSTER_CHANGED (class columns can change) and ASSIGNMENT_CHANGED (the
--- row list itself is partly assignment-driven -- see paladinRowNames).
+-- tile size, and the full layout for whichever of the three states is
+-- active. Runs on both ROSTER_CHANGED (class columns can change) and
+-- ASSIGNMENT_CHANGED (the row list itself is partly assignment-driven --
+-- see paladinRowNames).
 -- ============================================================
 
 local function hideRow(row)
@@ -1118,6 +1212,7 @@ local function hideRow(row)
 	row.manualMode = false
 	row.manualButton:SetChecked(false)
 	row.nameText:Hide()
+	row.tagText:Hide()
 	row.summaryText:Hide()
 	row.manualButton:Hide()
 	row.manualLabel:Hide()
@@ -1127,80 +1222,203 @@ local function hideRow(row)
 	end
 end
 
-local function refreshGridStructure()
+refreshGridStructure = function()
 	currentLayout = computeClassLayout()
+	local size = currentSize()
 	local rowNames = paladinRowNames()
 	local showPets = petsDisplayEnabled()
+	local myName = UnitName("player")
 
-	-- Column x-offsets, shared by every row.
+	-- Brand cluster, common to every state.
+	brandChip:ClearAllPoints()
+	brandChip:SetPoint("TOPLEFT", PADDING, -PADDING)
+	statusDot:ClearAllPoints()
+	statusDot:SetPoint("LEFT", brandChip, "RIGHT", 8, 0)
+
+	if size == "minimized" then
+		-- Pill: chip + dot + coverage text + divider + chevron. No grid.
+		brandChip:Show()
+		for i = 1, #gridRows do hideRow(gridRows[i]) end
+		for _, fs in pairs(classHeaderLabels) do fs:Hide() end
+		petsLabel:Hide()
+		auraLabel:Hide()
+		cbaLabel:Hide()
+
+		coverageText:ClearAllPoints()
+		coverageText:SetPoint("LEFT", statusDot, "RIGHT", 8, 0)
+		coverageText:Show()
+
+		dividerA:ClearAllPoints()
+		dividerA:SetPoint("LEFT", coverageText, "RIGHT", 8, 0)
+		dividerA:SetHeight(20)
+		dividerA:Show()
+		dividerB:Hide()
+
+		chevronButton:ClearAllPoints()
+		chevronButton:SetPoint("LEFT", dividerA, "RIGHT", 8, 0)
+		chevronButton:SetSize(24, 24)
+		chevronButton:Show()
+		chevronText:SetText("v")
+
+		resizeGrip:Hide()
+		refreshCoveragePill() -- also sizes the bar itself (see its own comment)
+		return
+	end
+
+	resizeGrip:Show()
+	coverageText:Hide()
+
+	local expanded = (size == "expanded")
+	local tileSize = expanded and EXPANDED_TILE or COMPACT_TILE
+	-- Fixed Y for the top of the content row -- everything below anchors
+	-- off `bar`/`gridAnchor`'s TOPLEFT with explicit offsets from here on,
+	-- rather than chaining vertical-centering ("LEFT"-to-"LEFT") anchors
+	-- through differently-sized neighbors. That matters because the total
+	-- bar height computed at the bottom of this function assumes content
+	-- starts exactly at rowTop -- a centered chain would silently drift
+	-- that starting point depending on the brand cluster's own measured
+	-- size and desync the height math for the (potentially very tall)
+	-- expanded grid.
+	local rowTop = -PADDING
+
+	-- Brand cluster: dot above a stacked vertical "CBA" label, no chip
+	-- (README §2b/2c/2d -- the gold chip is minimized-only, see the
+	-- minimized branch above). Fixed-width column so nothing below depends
+	-- on this cluster's own measured text size.
+	brandChip:Hide()
+	local clusterCenterY = rowTop - tileSize / 2
+	statusDot:ClearAllPoints()
+	statusDot:SetPoint("CENTER", bar, "TOPLEFT", PADDING + BRAND_CLUSTER_WIDTH / 2, clusterCenterY + 8)
+	cbaLabel:ClearAllPoints()
+	cbaLabel:SetPoint("CENTER", bar, "TOPLEFT", PADDING + BRAND_CLUSTER_WIDTH / 2, clusterCenterY - 6)
+	cbaLabel:Show()
+
+	dividerA:ClearAllPoints()
+	dividerA:SetPoint("TOPLEFT", bar, "TOPLEFT", PADDING + BRAND_CLUSTER_WIDTH, rowTop)
+	dividerA:SetHeight(tileSize)
+	dividerA:Show()
+
+	-- Column x-offsets, shared by every row, measured from the grid anchor
+	-- (just right of the first divider, pinned to rowTop).
+	gridAnchor:ClearAllPoints()
+	gridAnchor:SetPoint("TOPLEFT", dividerA, "TOPRIGHT", 10, 0)
+
 	local columnX, x = {}, 0
 	for i = 1, 9 do
 		if currentLayout[i] then
 			columnX[i] = x
-			x = x + BUTTON_SIZE + BUTTON_GAP
+			x = x + tileSize + BUTTON_GAP
 		end
 	end
 	local petsX
 	if showPets then
 		petsX = x
-		x = x + BUTTON_SIZE + BUTTON_GAP
+		x = x + tileSize + BUTTON_GAP
 	end
 	local auraX = x
-	local gridContentWidth = x + BUTTON_SIZE
+	local gridContentWidth = x + tileSize
 
-	-- Computed up front (not after the row loop) so the Manual column has a
-	-- fixed, reserved position independent of how few columns a small raid
-	-- has -- otherwise a 1-2 class grid would push the checkbox/label into
-	-- negative x and off the window's left edge.
-	local MANUAL_COLUMN_WIDTH = 60
-	local contentWidth = math.max(gridContentWidth, TOOLBAR_CONTENT_WIDTH, TITLE_MIN_WIDTH) + MANUAL_COLUMN_WIDTH
+	dividerB:ClearAllPoints()
+	dividerB:SetHeight(tileSize)
 
-	local y = 0
-	for i, paladinName in ipairs(rowNames) do
+	-- Manual column only exists in the expanded state.
+	local manualWidth = expanded and MANUAL_COLUMN_WIDTH or 0
+	local headerY = 0
+
+	if expanded then
+		-- Class-header row: one label per populated column, indented past
+		-- the name column (README §2d: "indented 104px to clear the name
+		-- column" -- 98px name width here, so a matching indent).
+		for i = 1, 9 do
+			local fs = getClassHeaderLabel(i)
+			if currentLayout[i] then
+				fs:SetText(CLASS_ABBR[currentLayout[i]])
+				fs:SetTextColor(Theme.ClassColor(currentLayout[i]))
+				fs:SetWidth(tileSize)
+				fs:ClearAllPoints()
+				fs:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", NAME_COL_WIDTH + columnX[i], headerY)
+				fs:Show()
+			else
+				fs:Hide()
+			end
+		end
+		headerY = headerY - HEADER_ROW_HEIGHT - 2
+	else
+		for _, fs in pairs(classHeaderLabels) do fs:Hide() end
+	end
+
+	petsLabel:ClearAllPoints()
+	auraLabel:ClearAllPoints()
+	if showPets then
+		petsLabel:SetWidth(tileSize)
+		petsLabel:SetJustifyH("CENTER")
+		petsLabel:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", (expanded and NAME_COL_WIDTH or 0) + petsX, headerY)
+		petsLabel:Show()
+	else
+		petsLabel:Hide()
+	end
+	auraLabel:SetWidth(tileSize)
+	auraLabel:SetJustifyH("CENTER")
+	auraLabel:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", (expanded and NAME_COL_WIDTH or 0) + auraX, headerY)
+	auraLabel:Show()
+	if expanded then headerY = headerY - HEADER_ROW_HEIGHT end
+
+	local rowsToShow = expanded and rowNames or { rowNames[1] }
+	local y = headerY
+	for i, paladinName in ipairs(rowsToShow) do
 		local row = getGridRow(i)
 		row.paladinName = paladinName
+		local isSelf = paladinName == myName
 
-		if i == 1 then
-			y = y - LABEL_HEIGHT -- headroom for row 1's column labels
+		if expanded then
+			row.nameText:ClearAllPoints()
+			row.nameText:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", 0, y)
+			row.nameText:SetTextColor(Theme.ClassColor("PALADIN"))
+			row.nameText:SetText(paladinName)
+			row.nameText:Show()
+
+			row.tagText:ClearAllPoints()
+			row.tagText:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", 0, y - NAME_ROW_HEIGHT)
+			row.tagText:SetText(isSelf and "you . live" or "read-only")
+			row.tagText:Show()
+
+			local canEdit = canEditRow(row)
+			row.manualButton:ClearAllPoints()
+			row.manualButton:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", NAME_COL_WIDTH + gridContentWidth + 10, y)
+			row.manualButton:SetEnabled(canEdit)
+			if not canEdit then
+				row.manualMode = false
+				row.manualButton:SetChecked(false)
+			end
+			row.manualButton:Show()
+			row.manualLabel:ClearAllPoints()
+			row.manualLabel:SetPoint("LEFT", row.manualButton, "RIGHT", 2, 0)
+			row.manualLabel:Show()
+			applyManualVisibility(row, true)
+
+			row.summaryText:ClearAllPoints()
+			row.summaryText:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", 0, y - NAME_ROW_HEIGHT - TAG_ROW_HEIGHT)
+			row.summaryText:Hide() -- name/tag replace the old summary line in the expanded row header
+		else
+			row.nameText:Hide()
+			row.tagText:Hide()
+			row.summaryText:Hide()
+			row.manualButton:Hide()
+			row.manualLabel:Hide()
+			applyManualVisibility(row, false)
 		end
 
-		row.nameText:ClearAllPoints()
-		row.nameText:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", 0, y)
-		row.nameText:SetText(("|cffffffff%s|r  %s"):format(paladinName, SYNC_LABEL[syncStatusFor(paladinName)]))
-		row.nameText:Show()
-
-		local canEdit = canEditRow(row)
-		row.manualButton:ClearAllPoints()
-		row.manualButton:SetPoint("TOPRIGHT", gridAnchor, "TOPLEFT", contentWidth, y + 2)
-		row.manualButton:SetEnabled(canEdit)
-		if not canEdit then
-			row.manualMode = false
-			row.manualButton:SetChecked(false)
-		end
-		row.manualButton:Show()
-		row.manualLabel:ClearAllPoints()
-		row.manualLabel:SetPoint("RIGHT", row.manualButton, "LEFT", -2, 0)
-		row.manualLabel:Show()
-		applyManualVisibility(row)
-
-		y = y - NAME_ROW_HEIGHT
-
-		row.summaryText:ClearAllPoints()
-		row.summaryText:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", 2, y)
-		row.summaryText:SetText(paladinSummaryText(paladinName))
-		row.summaryText:Show()
-		y = y - SUMMARY_ROW_HEIGHT
+		local cellY = expanded and (y - NAME_ROW_HEIGHT - TAG_ROW_HEIGHT - 2) or y
+		local nameColOffset = expanded and NAME_COL_WIDTH or 0
 
 		for slot = 1, 9 do
 			local cell = row.cells[slot]
 			cell:ClearAllPoints()
 			if currentLayout[slot] then
 				cell.class = currentLayout[slot]
-				cell:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", columnX[slot], y)
+				cell:SetSize(tileSize, tileSize)
+				cell:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + columnX[slot], cellY)
 				cell:Show()
-				if i == 1 then
-					cell.classLabel:SetText(classDisplayLabel(currentLayout[slot]))
-				end
 			else
 				cell.class = nil
 				cell:Hide()
@@ -1208,72 +1426,71 @@ local function refreshGridStructure()
 		end
 
 		row.cells.pets:ClearAllPoints()
+		row.cells.pets:SetSize(tileSize, tileSize)
 		if showPets then
-			row.cells.pets:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", petsX, y)
+			row.cells.pets:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + petsX, cellY)
 			row.cells.pets:Show()
 		else
 			row.cells.pets:Hide()
 		end
 
 		row.cells.aura:ClearAllPoints()
-		row.cells.aura:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", auraX, y)
+		row.cells.aura:SetSize(tileSize, tileSize)
+		row.cells.aura:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + auraX, cellY)
 		row.cells.aura:Show()
 
-		y = y - BUTTON_SIZE - ROW_BLOCK_GAP
-	end
+		-- Non-self rows in the expanded view read as coverage only --
+		-- dimmed to match README's opacity ~.62 on those rows.
+		local rowAlpha = (expanded and not isSelf) and 0.62 or 1
+		for _, cell in pairs(row.cells) do cell:SetAlpha(rowAlpha) end
+		row.nameText:SetAlpha(rowAlpha)
+		row.tagText:SetAlpha(rowAlpha)
 
-	for i = #rowNames + 1, #gridRows do
-		hideRow(gridRows[i])
-	end
-
-	titleBar:ClearAllPoints()
-	titleBar:SetPoint("TOPLEFT", PADDING, -PADDING)
-	titleBar:SetWidth(contentWidth)
-
-	bar:SetSize(
-		contentWidth + PADDING * 2,
-		PADDING + TITLE_HEIGHT + ROW_GAP + TOOLBAR_HEIGHT + ROW_GAP + (-y) + PADDING
-	)
-end
-
--- ============================================================
--- "Cast next needed": highest-value entry from CBAB.Track:Missing() that
--- THIS paladin is assigned to fix, ordered by spec 4's value table.
--- Unchanged from the pre-grid design -- a single per-player utility, not
--- part of the per-paladin grid.
--- ============================================================
-
-local VALUE_ORDER = { salv = 1, kings = 2, light = 3, might = 4, wisdom = 5, sanctuary = 6 }
-
-local function refreshNextButton()
-	local myName = UnitName("player")
-	local best
-	for _, m in ipairs(getTrackMissing()) do
-		if m.assignedTo == myName then
-			if not best or (VALUE_ORDER[m.blessing] or 99) < (VALUE_ORDER[best.blessing] or 99) then
-				best = m
-			end
+		if expanded then
+			y = y - NAME_ROW_HEIGHT - TAG_ROW_HEIGHT - tileSize - ROW_BLOCK_GAP
+		else
+			y = y - tileSize
 		end
 	end
 
-	if best then
-		nextButton.icon:SetTexture(CBAB.Blessings[best.blessing].texture)
-		nextButton:SetBackdropBorderColor(unpack(MISSING_COLOR))
-		setAttributeSafe(nextButton, "type1", "spell")
-		setAttributeSafe(nextButton, "spell1", spellNameFor(best.blessing, false))
-		setAttributeSafe(nextButton, "unit1", best.unit)
-	else
-		nextButton.icon:SetTexture(nil)
-		nextButton:SetBackdropBorderColor(unpack(NEUTRAL_COLOR))
-		setAttributeSafe(nextButton, "spell1", nil)
+	for i = #rowsToShow + 1, #gridRows do
+		hideRow(gridRows[i])
 	end
+
+	local rightContentWidth = gridContentWidth + (expanded and NAME_COL_WIDTH or 0) + manualWidth
+	dividerB:ClearAllPoints()
+	dividerB:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", rightContentWidth + 10, 0)
+	if not expanded then
+		dividerB:Show()
+		chevronButton:ClearAllPoints()
+		chevronButton:SetPoint("LEFT", dividerB, "RIGHT", 10, 0)
+		chevronButton:SetSize(30, tileSize)
+	else
+		dividerB:Hide()
+		chevronButton:ClearAllPoints()
+		chevronButton:SetPoint("TOPRIGHT", -PADDING, -PADDING)
+		chevronButton:SetSize(26, 22)
+	end
+	chevronButton:Show()
+	chevronText:SetText(expanded and "^" or "v")
+
+	-- Both formulas assume content starts exactly at rowTop (= -PADDING) --
+	-- true by construction now that the brand cluster is a fixed-width
+	-- column and gridAnchor is pinned via TOPLEFT rather than centered
+	-- against it (see the comment above rowTop's declaration).
+	local totalWidth = PADDING + BRAND_CLUSTER_WIDTH + DIVIDER_WIDTH + 10 + rightContentWidth + 10 + PADDING
+	if not expanded then
+		totalWidth = totalWidth + DIVIDER_WIDTH + 10 + 30
+	end
+	local totalHeight = PADDING + (expanded and (-y) or tileSize) + PADDING
+
+	bar:SetSize(math.max(totalWidth, MIN_PILL_HEIGHT * 3), math.max(totalHeight, MIN_PILL_HEIGHT))
 end
 
 -- ============================================================
 -- Popout player buttons for single-target casts (spec 11.2). Row 1 (the
--- local player) only -- this predates the grid and stays scoped to the
--- compat row it was built for; other rows show their per-class summary
--- via the grid cell's own tooltip instead.
+-- local player) only -- other rows show their per-class summary via the
+-- grid cell's own tooltip instead.
 -- ============================================================
 
 local popoutButtons = {}
@@ -1283,17 +1500,17 @@ local function getPopoutButton(index)
 	if not btn then
 		btn = CreateFrame("Button", "CBABuffPopout" .. index, bar, "SecureActionButtonTemplate")
 		btn:RegisterForClicks("AnyDown")
-		btn:SetSize(BUTTON_SIZE - 6, BUTTON_SIZE - 6)
 		btn.icon = btn:CreateTexture(nil, "ARTWORK")
 		btn.icon:SetAllPoints()
 		CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+		btn:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
 		popoutButtons[index] = btn
 	end
 	return btn
 end
 
 function CBAB.Bar_ShowPopout(classButton)
-	if not classButton.class then return end
+	if not classButton.class or not classButton:IsShown() then return end
 
 	local myName = UnitName("player")
 	local assignment = getAssignment()
@@ -1305,10 +1522,12 @@ function CBAB.Bar_ShowPopout(classButton)
 	end
 	table.sort(members, function(a, b) return a.unit < b.unit end)
 
+	local popSize = classButton:GetWidth() - 6
 	for i, member in ipairs(members) do
 		local btn = getPopoutButton(i)
+		btn:SetSize(popSize, popSize)
 		btn:ClearAllPoints()
-		btn:SetPoint("BOTTOM", classButton, "TOP", 0, 4 + (i - 1) * (BUTTON_SIZE - 4))
+		btn:SetPoint("BOTTOM", classButton, "TOP", 0, 4 + (i - 1) * (popSize + 2))
 		btn:Show()
 
 		local blessing
@@ -1361,70 +1580,9 @@ function CBAB.Bar_ScheduleHidePopout()
 end
 
 -- ============================================================
--- Handle tooltip: the local player's own summary (spec 11.2's "tooltip,
--- not a page") -- redundant with row 1's own name/summary line now that
--- the grid always shows it, but kept as a quick glance from the drag
--- handle without having to find row 1 in a tall grid.
--- ============================================================
-
-handle:SetScript("OnEnter", function(self)
-	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText("CBA Buff", 1, 1, 1)
-
-	local myName = UnitName("player")
-	if debugMode then
-		GameTooltip:AddLine("|cffff8800pbar debug mode|r", 1, 0.6, 0)
-	end
-	GameTooltip:AddLine(paladinSummaryText(myName), 0.9, 0.9, 0.9)
-	GameTooltip:Show()
-end)
-handle:SetScript("OnLeave", GameTooltip_Hide)
-
--- A plain left click (no drag) opens the roster page -- the non-chat entry
--- point the editor's acceptance test wants (spec 11.1). A press-then-move
--- is captured by OnDragStart above instead; only a press-release with no
--- movement reaches OnClick, so this doesn't conflict with dragging.
-handle:RegisterForClicks("LeftButtonUp")
-handle:SetScript("OnClick", function()
-	if CBAB.RosterPage then
-		CBAB.RosterPage:Toggle()
-	end
-end)
-
--- ============================================================
--- Report: raid-chat summary of the current assignment (spec 11.4 -- manual
--- button only, never automatic). Coordinator-gated, same as Push.
--- ============================================================
-
-function CBAB.Bar_PostReport()
-	if not CBAB:Mode().coordinator then
-		CBAB:Print("only the leader or an assist can post a raid report")
-		return
-	end
-	local channel = CBAB.Comm:GroupChannel()
-	if not channel then
-		CBAB:Print("not in a group -- nothing to report to")
-		return
-	end
-	local assignment = getAssignment()
-	if not assignment then
-		CBAB:Print("no assignment to report")
-		return
-	end
-
-	SendChatMessage(("-- CBA Buff assignment (epoch %d) --"):format(assignment.epoch), channel)
-	for _, name in ipairs(paladinRowNames()) do
-		local line = ("%s: %s"):format(name, paladinSummaryText(name))
-		if #line > 250 then line = line:sub(1, 247) .. "..." end
-		SendChatMessage(line, channel)
-	end
-end
-
-reportButton:SetScript("OnClick", CBAB.Bar_PostReport)
-
--- ============================================================
--- Show/hide: the Close button on the title row sets this, /cbab bar and
--- Config's "Show bar" checkbox both toggle it too.
+-- Show/hide: Config's "Show bar" checkbox toggles this (the bar has no
+-- visible close button of its own anymore, matching the reference
+-- design's minimal chrome -- README: only brand/dot/tiles/chevron).
 -- ============================================================
 
 function CBAB.Bar_SetShown(shown)
@@ -1437,7 +1595,7 @@ function CBAB.Bar_SetShown(shown)
 end
 
 -- ============================================================
--- Position / lock / compact from CBABuffCharDB.ui.bar, and PallyPower
+-- Position / lock / scale from CBABuffCharDB.ui.bar, and PallyPower
 -- collision warning (spec 11.2). Both wait for DB:Init() via ADDON_LOADED.
 -- ============================================================
 
@@ -1447,13 +1605,11 @@ local function applySavedPosition()
 	bar:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or -180)
 	bar:SetScale(ui.scale or 1.0)
 	-- Full refresh immediately at ADDON_LOADED rather than waiting for the
-	-- first ROSTER_CHANGED, so the grid's chrome is visible even before any
+	-- first ROSTER_CHANGED, so the bar's chrome is visible even before any
 	-- group exists.
 	refreshGridStructure()
 	refreshAssignment()
 	refreshVisualState()
-	refreshNextButton()
-	refreshChrome()
 	CBAB.Bar_SetShown(ui.shown ~= false)
 end
 
@@ -1471,9 +1627,9 @@ local function checkPallyPowerCollision()
 
 	StaticPopupDialogs["CBAB_PALLYPOWER_COLLISION"] = {
 		text = "CBA Buff and PallyPower are both loaded. Both addons use the same "
-			.. "secure button names (PallyPowerC1-C9, PallyPowerRF) for macro "
-			.. "compatibility, so raid macros clicking those names will behave "
-			.. "unpredictably with both active. Disable one.",
+			.. "secure button names (PallyPowerC1-C9) for macro compatibility, so "
+			.. "raid macros clicking those names will behave unpredictably with "
+			.. "both active. Disable one.",
 		button1 = OKAY or "OK",
 		timeout = 0,
 		whileDead = true,
@@ -1493,24 +1649,21 @@ CBAB:On("ROSTER_CHANGED", "bar:roster", function()
 	refreshGridStructure()
 	refreshAssignment()
 	refreshVisualState()
-	refreshNextButton()
 end)
 CBAB:On("ASSIGNMENT_CHANGED", "bar:assignment", function()
 	refreshGridStructure()
 	refreshAssignment()
 	refreshVisualState()
-	refreshNextButton()
 end)
 CBAB:On("BUFF_STATE_CHANGED", "bar:buffstate", function()
 	refreshVisualState()
-	refreshNextButton()
 end)
 
 -- Class cells are blocked in combat via the `[nocombat]` macro conditional
 -- baked into their macrotext (buildClassMacro above) -- not a runtime
 -- attribute toggle, which secure attributes don't allow at the moment
--- combat actually starts. Pets/aura/popout/next-button attributes have no
--- such guard, so they stay usable in combat (spec 11.2).
+-- combat actually starts. Pets/aura/popout attributes have no such guard,
+-- so they stay usable in combat (spec 11.2).
 CBAB:On("PLAYER_REGEN_ENABLED", "bar:combat-unlock", function()
 	refreshAssignment()
 end)
@@ -1539,12 +1692,11 @@ CBAB.SlashCommands.pbar = function()
 	refreshGridStructure()
 	refreshAssignment()
 	refreshVisualState()
-	refreshNextButton()
 end
 
 -- ============================================================
--- /cbab bar: toggles bar visibility -- the other half of the Close
--- button's escape hatch, alongside Config's "Show bar" checkbox.
+-- /cbab bar: toggles bar visibility -- the other half of Config's "Show
+-- bar" checkbox.
 -- ============================================================
 
 CBAB.SlashCommands.bar = function()
@@ -1556,4 +1708,35 @@ end
 
 function CBAB.Bar_Toggle()
 	CBAB.SlashCommands.bar()
+end
+
+-- ============================================================
+-- Raid-chat assignment report (spec 11.4). Was a pbar toolbar button
+-- pre-redesign; the Combat Strip has no toolbar, so this is now called
+-- from UI/RosterPage.lua's Solve rail instead. The function itself is
+-- unchanged -- only its entry point moved.
+-- ============================================================
+
+function CBAB.PostReport()
+	if not CBAB:Mode().coordinator then
+		CBAB:Print("only the leader or an assist can post a raid report")
+		return
+	end
+	local channel = CBAB.Comm:GroupChannel()
+	if not channel then
+		CBAB:Print("not in a group -- nothing to report to")
+		return
+	end
+	local assignment = getAssignment()
+	if not assignment then
+		CBAB:Print("no assignment to report")
+		return
+	end
+
+	SendChatMessage(("-- CBA Buff assignment (epoch %d) --"):format(assignment.epoch), channel)
+	for _, name in ipairs(paladinRowNames()) do
+		local line = ("%s: %s"):format(name, paladinSummaryText(name))
+		if #line > 250 then line = line:sub(1, 247) .. "..." end
+		SendChatMessage(line, channel)
+	end
 end

@@ -8,7 +8,7 @@ local LibDeflate = LibStub("LibDeflate")
 CBAB.DB = {}
 
 local DB_SCHEMA_VERSION = 1
-local CHAR_SCHEMA_VERSION = 1
+local CHAR_SCHEMA_VERSION = 2
 
 local function copy(t)
 	if type(t) ~= "table" then return t end
@@ -32,7 +32,19 @@ local DB_MIGRATIONS = {
 }
 
 local CHAR_MIGRATIONS = {
-	-- [2] = function(char) char.someNewKey = char.someNewKey or default end,
+	-- v2: the pbar's old boolean compact toggle became a 3-state size cycle
+	-- (minimized/compact/expanded, UI/Bar.lua). old compact=true meant the
+	-- single-row "your casts" layout, which is the new "compact" state;
+	-- compact=false meant the always-shown multi-row grid, now "expanded".
+	-- The old `compact` key is left in place, just unread from here on --
+	-- this file never deletes old data (see header comment above).
+	[2] = function(char)
+		char.ui = char.ui or {}
+		char.ui.bar = char.ui.bar or {}
+		if char.ui.bar.size == nil then
+			char.ui.bar.size = (char.ui.bar.compact == false) and "expanded" or "compact"
+		end
+	end,
 }
 
 local function applyMigrations(tbl, migrations, targetVersion)

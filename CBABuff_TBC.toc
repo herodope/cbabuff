@@ -25,6 +25,7 @@ Solver/Validate.lua
 Comm.lua
 Track.lua
 Solve.lua
+UI/Theme.lua
 UI/Bar.lua
 UI/Alert.lua
 UI/RosterPage.lua
