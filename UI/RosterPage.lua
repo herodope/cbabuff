@@ -1,11 +1,30 @@
 local ADDON, CBAB = ...
+local Theme = CBAB.Theme
 
--- The roster page (spec 7, 11.6). Redesigned per session feedback into
--- three stacked, independently N+1-auto-growing sections sharing one
--- underlying profile.roster array (spec 11.6, amended): every row list
--- shows its current entries plus exactly one blank row at the end to type
--- a new one into -- never a fixed row count, and never more than one
--- blank row at a time.
+-- The roster window (spec 7, 11.6). Visually reskinned per the design
+-- handoff (UI/redesign/design_handoff_cba_buff/README.md, "2. Roster
+-- window") on top of UI/Theme.lua, the same shared design system UI/Bar.lua
+-- already builds on -- this file's own business logic (profile CRUD, the
+-- three growing sections, the planned-assignment preview, export/import) is
+-- unchanged from the pre-redesign version; only frame creation/styling and
+-- the top-level layout moved. Two structural changes from the handoff:
+--   - The profile toolbar consolidates the old name-box+Switch button into
+--     the dropdown alone (selecting an entry already switches); the name
+--     box now only feeds New/Rename, which need freeform text the dropdown
+--     can't provide.
+--   - The former in-scroll "Assignments" section (Solve/Push/Sync/Report +
+--     the resolved/warning text) is now the handoff's fixed right-hand
+--     Solve rail, sharing this file's buildPlannedAssignment/doSolvePlan
+--     with the paladin/tank tables' own scroll area -- this is what fixes
+--     the pre-redesign double-scrollbar (tables and rail no longer share
+--     one scroll region).
+-- Class Headcounts (manual per-class/spec want-count input, used only to
+-- seed the planning preview before real capability/spec data exists -- see
+-- assumedSlotOrder below) has no equivalent in the reference design, which
+-- shows plain read-only headcount chips. Both survive here: the editable
+-- input section stays in the main scroll (it's a data-entry tool, not a
+-- summary), and the rail additionally renders the same data as read-only
+-- class-colored chips per the handoff, purely as a summary.
 --
 -- Sections:
 --   1. Paladins  -- name, tank flag, optional spec hint, and an auto-filled
@@ -37,18 +56,48 @@ local ADDON, CBAB = ...
 
 CBAB.RosterPage = {}
 
-local ROW_HEIGHT = 20
-local HEADER_HEIGHT = 20
-local COLHEAD_HEIGHT = 14
+-- ============================================================
+-- Layout constants (design handoff README.md, "2. Roster window").
+-- ============================================================
+
+local WINDOW_WIDTH = 1040
+local WINDOW_HEIGHT = 720
+local RAIL_WIDTH = 300
+
+local ROW_HEIGHT = 22
+local HEADER_HEIGHT = 22
+local COLHEAD_HEIGHT = 16
 local SECTION_GAP = 14
 local MAX_ROWS = 26 -- raid cap (25) + one blank row headroom
-local CONTENT_WIDTH = 600
-local SCROLLBAR_CLEARANCE = 46
+local CONTENT_WIDTH = 660
 local DELETE_SIZE = 22 -- red X delete button, sits right after each name
 -- A UIDropDownMenuTemplate's visible text starts ~this far right of the
 -- frame's own left edge (the template's left-cap texture). Column headers
 -- for dropdown columns are offset by this so the label sits over the text.
 local DD_TEXT_INSET = 18
+
+-- Paladin row x-layout. Assign/Aura each get a small color-coded dot placed
+-- just before the dropdown, sized to leave a 4px gap on both sides, so "the
+-- color system reads even at a glance" (README, Icons) without having to
+-- retexture the native dropdown chrome itself (see file header, Fidelity).
+local PAL_NAME_X = 6
+local PAL_TANK_X = 150
+local PAL_SPEC_X = 182
+local PAL_ASSIGN_DOT_X = 244
+local PAL_ASSIGN_X = 254
+local PAL_ASSIGN_WIDTH = 90
+local PAL_AURA_DOT_X = PAL_ASSIGN_X + PAL_ASSIGN_WIDTH + 4
+local PAL_AURA_X = PAL_AURA_DOT_X + 10
+local PAL_AURA_WIDTH = 70
+
+-- Tank row x-layout: same color-dot treatment for the class column and
+-- each of the four buff-priority columns.
+local TANK_CLASS_DOT_X = 140
+local TANK_CLASS_DD_X = 150
+local TANK_CLASS_DD_WIDTH = 60
+local TANK_BUFF_DOT_X = { 224, 294, 364, 434 }
+local TANK_BUFF_DD_X = { 234, 304, 374, 444 }
+local TANK_BUFF_DD_WIDTH = 50
 
 -- ============================================================
 -- Small shared helpers
@@ -66,15 +115,25 @@ local function auraLabel(key)
 	return a and a.name or key
 end
 
+-- 6-hex (no '#', no alpha) class color, for Theme.Hex/Theme.CreateDot --
+-- RAID_CLASS_COLORS.colorStr is 8 hex (AARRGGBB), so the leading alpha
+-- pair is stripped.
+local function classHex(class)
+	local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+	if c and c.colorStr then return c.colorStr:sub(3) end
+	return (Theme.Colors.textSecondary):gsub("#", "")
+end
+
 local function classLabel(class)
 	if not class then return "-" end
-	local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
 	local displayName = class:sub(1, 1) .. class:sub(2):lower()
-	if color and color.colorStr then
-		return "|c" .. color.colorStr .. displayName .. "|r"
-	end
-	return displayName
+	return "|cff" .. classHex(class) .. displayName .. "|r"
 end
+
+local CLASS_ABBR = {
+	WARRIOR = "WAR", ROGUE = "ROG", PRIEST = "PRI", DRUID = "DRU", PALADIN = "PAL",
+	HUNTER = "HUN", MAGE = "MAG", WARLOCK = "WLK", SHAMAN = "SHM",
+}
 
 -- Tallies a raid-wide physical/caster headcount from the manual
 -- specCounts table (spec 5.4's classification, reused from
@@ -120,113 +179,90 @@ local function assumedSlotOrder(n, primary)
 end
 
 -- ============================================================
--- Window
+-- Window chrome: same fill/hairline/shadow recipe as UI/Bar.lua, sized to
+-- the handoff's ~1040px roster width. Only the title bar is a drag handle
+-- now (README: whole-window drag was a pbar-only allowance).
 -- ============================================================
 
 local window = CreateFrame("Frame", "CBABuffRosterPage", UIParent)
-window:SetSize(700, 760)
+window:SetSize(WINDOW_WIDTH, WINDOW_HEIGHT)
 window:SetPoint("CENTER")
 window:SetMovable(true)
 window:EnableMouse(true)
 window:SetClampedToScreen(true)
-CBAB:ApplyBackdrop(window, {
-	bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-	edgeSize = 16,
-	insets = { left = 4, right = 4, top = 4, bottom = 4 },
-})
+CBAB:ApplyBackdrop(window, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+Theme.ApplyFill(window, Theme.Colors.windowFillTop, Theme.Colors.windowFillBottom, 1)
+window:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderSubtle))
+Theme.ApplyDropShadow(window, { pad = 16, yOffset = 10, alpha = 0.55 })
+Theme.ApplyTopHairline(window, Theme.Colors.gold)
 window:Hide()
-
-local title = window:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-title:SetPoint("TOP", 0, -12)
-title:SetText("CBA Buff -- Roster")
-
-local closeButton = CreateFrame("Button", nil, window, "UIPanelCloseButton")
-closeButton:SetPoint("TOPRIGHT", -4, -4)
-closeButton:SetScript("OnClick", function() window:Hide() end)
-
-window:RegisterForDrag("LeftButton")
-window:SetScript("OnDragStart", function() window:StartMoving() end)
-window:SetScript("OnDragStop", function() window:StopMovingOrSizing() end)
 
 -- Forward-declared: bind functions created below close over these as
 -- upvalues, but the real bodies aren't assigned until after every row/
 -- section is built.
-local commitAll, refreshAll
+local commitAll, refreshAll, doSolvePlan, ioBox
+
+local titleBar = CreateFrame("Frame", nil, window)
+titleBar:SetPoint("TOPLEFT", 0, 0)
+titleBar:SetPoint("TOPRIGHT", 0, 0)
+titleBar:SetHeight(40)
+titleBar:EnableMouse(true)
+titleBar:RegisterForDrag("LeftButton")
+titleBar:SetScript("OnDragStart", function() window:StartMoving() end)
+titleBar:SetScript("OnDragStop", function() window:StopMovingOrSizing() end)
+
+local brandChip = CreateFrame("Frame", nil, titleBar)
+brandChip:SetSize(20, 20)
+brandChip:SetPoint("LEFT", 14, 0)
+Theme.ApplyFill(brandChip, Theme.Colors.gold, Theme.Colors.goldDark, 0)
+
+local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(titleText, "Title", { color = "textPrimary", spacing = 2 })
+titleText:SetPoint("LEFT", brandChip, "RIGHT", 10, 0)
+titleText:SetText(("CBA BUFF"))
+
+local subtitleText = titleBar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(subtitleText, "Subtitle", { color = "textSecondary" })
+subtitleText:SetPoint("LEFT", titleText, "RIGHT", 8, 0)
+subtitleText:SetText("Roster")
+
+local closeButton = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
+closeButton:SetPoint("TOPRIGHT", -6, -6)
+closeButton:SetScript("OnClick", function() window:Hide() end)
 
 -- ============================================================
--- Profile switcher. A name box plus New/Rename/Delete/Switch buttons
--- acting on whatever's typed, each anchored to the PREVIOUS button's right
--- edge rather than at fixed offsets from the name box -- this is what
--- keeps Delete on-screen regardless of button label width, instead of the
--- earlier fixed-offset layout that ran past the window edge. A dropdown
--- (native UIDropDownMenuTemplate, not the banned LibUIDropDownMenu -- spec
--- 1) replaces the old N+1 row of clickable profile-name buttons.
+-- Profile toolbar (README: "one row"): PROFILE label + selector dropdown +
+-- New/Rename/Delete acting on the typed name, then (right-anchored, so the
+-- gap between the two clusters reads as the handoff's spacer) the Pets
+-- toggle, Open pbar, a divider, and Export/Import. The old separate
+-- "Switch" button is gone -- picking an entry from the dropdown already
+-- calls SetActiveProfile; the name box now exists only to type a NEW name
+-- for New/Rename, which the dropdown can't provide.
 -- ============================================================
 
-local profileBar = CreateFrame("Frame", nil, window)
-profileBar:SetPoint("TOPLEFT", 12, -36)
-profileBar:SetPoint("TOPRIGHT", -12, -36)
-profileBar:SetHeight(22)
+local toolbar = CreateFrame("Frame", nil, window)
+toolbar:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 14, -10)
+toolbar:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", -14, -10)
+toolbar:SetHeight(24)
 
-local activeProfileText = profileBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-activeProfileText:SetPoint("LEFT", 0, 0)
-activeProfileText:SetWidth(100)
-activeProfileText:SetJustifyH("LEFT")
+local profileLabel = toolbar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(profileLabel, "ColumnLabel", { color = "textFaint" })
+profileLabel:SetPoint("LEFT", 0, 0)
+profileLabel:SetText("PROFILE")
 
-local profileNameBox = CreateFrame("EditBox", nil, profileBar, "InputBoxTemplate")
+-- Native UIDropDownMenuTemplate chrome is left un-retextured (same posture
+-- as UI/Bar.lua's gridEditDropdown) -- the handoff's "selector pill" look
+-- doesn't have a cheap backdrop-based equivalent for a menu that also needs
+-- Blizzard's own click-open-highlight behavior.
+local profileDropdown = CreateFrame("Frame", "CBABuffRosterProfileDropdown", toolbar, "UIDropDownMenuTemplate")
+profileDropdown:SetPoint("LEFT", profileLabel, "RIGHT", -2, -2)
+UIDropDownMenu_SetWidth(profileDropdown, 140)
+
+local profileNameBox = CreateFrame("EditBox", nil, toolbar, "InputBoxTemplate")
 profileNameBox:SetSize(110, 20)
-profileNameBox:SetPoint("LEFT", activeProfileText, "RIGHT", 4, 0)
+profileNameBox:SetPoint("LEFT", profileDropdown, "RIGHT", 4, 2)
 profileNameBox:SetAutoFocus(false)
 
-local function profileButton(label, anchorTo, xOffset, onClick)
-	local btn = CreateFrame("Button", nil, profileBar, "UIPanelButtonTemplate")
-	btn:SetSize(56, 20)
-	btn:SetPoint("LEFT", anchorTo, "RIGHT", xOffset, 0)
-	btn:SetText(label)
-	btn:SetScript("OnClick", onClick)
-	return btn
-end
-
-local switchButton = profileButton("Switch", profileNameBox, 6, function()
-	local name = profileNameBox:GetText()
-	local ok, err = CBAB.DB:SetActiveProfile(name)
-	if not ok then CBAB:Print(err) end
-	refreshAll()
-end)
-local newButton = profileButton("New", switchButton, 4, function()
-	local name = profileNameBox:GetText()
-	local ok, err = CBAB.DB:CreateProfile(name)
-	if ok then
-		CBAB.DB:SetActiveProfile(name)
-		CBAB:Print(("created and switched to a new, empty profile '%s' -- your other profiles are untouched, switch back any time"):format(name))
-	else
-		CBAB:Print(err)
-	end
-	refreshAll()
-end)
-local renameButton = profileButton("Rename", newButton, 4, function()
-	local profile = CBAB.DB:Profile()
-	local newName = profileNameBox:GetText()
-	if not profile then CBAB:Print("no active profile") return end
-	local ok, err = CBAB.DB:RenameProfile(profile.name, newName)
-	if not ok then CBAB:Print(err) end
-	refreshAll()
-end)
-profileButton("Delete", renameButton, 4, function()
-	local name = profileNameBox:GetText()
-	local ok, err = CBAB.DB:DeleteProfile(name)
-	if not ok then CBAB:Print(err) end
-	refreshAll()
-end)
-
-local profileDropdownLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-profileDropdownLabel:SetPoint("TOPLEFT", profileBar, "BOTTOMLEFT", 0, -8)
-profileDropdownLabel:SetText("Profiles:")
-
-local profileDropdown = CreateFrame("Frame", "CBABuffRosterProfileDropdown", window, "UIDropDownMenuTemplate")
-profileDropdown:SetPoint("LEFT", profileDropdownLabel, "RIGHT", -6, -2)
-UIDropDownMenu_SetWidth(profileDropdown, 160)
 UIDropDownMenu_Initialize(profileDropdown, function(self, level)
 	local profile = CBAB.DB:Profile()
 	local names = {}
@@ -248,52 +284,144 @@ UIDropDownMenu_Initialize(profileDropdown, function(self, level)
 	end
 end)
 
+local newButton = Theme.CreateButton(toolbar, {
+	text = "New", width = 48, height = 20,
+	onClick = function()
+		local name = profileNameBox:GetText()
+		local ok, err = CBAB.DB:CreateProfile(name)
+		if ok then
+			CBAB.DB:SetActiveProfile(name)
+			CBAB:Print(("created and switched to a new, empty profile '%s' -- your other profiles are untouched, switch back any time"):format(name))
+		else
+			CBAB:Print(err)
+		end
+		refreshAll()
+	end,
+})
+newButton:SetPoint("LEFT", profileNameBox, "RIGHT", 8, 0)
+
+local renameButton = Theme.CreateButton(toolbar, {
+	text = "Rename", width = 58, height = 20,
+	onClick = function()
+		local profile = CBAB.DB:Profile()
+		local newName = profileNameBox:GetText()
+		if not profile then CBAB:Print("no active profile") return end
+		local ok, err = CBAB.DB:RenameProfile(profile.name, newName)
+		if not ok then CBAB:Print(err) end
+		refreshAll()
+	end,
+})
+renameButton:SetPoint("LEFT", newButton, "RIGHT", 4, 0)
+
+local deleteButton = Theme.CreateButton(toolbar, {
+	text = "Delete", width = 54, height = 20, variant = "outline-red",
+	onClick = function()
+		local name = profileNameBox:GetText()
+		local ok, err = CBAB.DB:DeleteProfile(name)
+		if not ok then CBAB:Print(err) end
+		refreshAll()
+	end,
+})
+deleteButton:SetPoint("LEFT", renameButton, "RIGHT", 4, 0)
+
+-- Right-anchored cluster, built right-to-left so the gap between it and the
+-- left cluster above is whatever's left -- the handoff's "spacer".
+local importButton = Theme.CreateButton(toolbar, {
+	text = "Import", width = 60, height = 20,
+	onClick = function()
+		local text = ioBox:GetText()
+		local ok, err = CBAB.DB:Import(text)
+		if ok then
+			CBAB:Print("import succeeded")
+		else
+			CBAB:Print("import failed: " .. tostring(err))
+		end
+		refreshAll()
+	end,
+})
+importButton:SetPoint("RIGHT", 0, 0)
+
+local exportButton = Theme.CreateButton(toolbar, {
+	text = "Export", width = 60, height = 20,
+	onClick = function()
+		local profile = CBAB.DB:Profile()
+		if not profile then
+			CBAB:Print("no active profile to export")
+			return
+		end
+		local str, err = CBAB.DB:Export(profile.name)
+		if not str then
+			CBAB:Print(err)
+			return
+		end
+		ioBox:SetText(str)
+		ioBox:HighlightText()
+		ioBox:SetFocus()
+	end,
+})
+exportButton:SetPoint("RIGHT", importButton, "LEFT", -6, 0)
+
+local toolbarDivider = toolbar:CreateTexture(nil, "ARTWORK")
+toolbarDivider:SetSize(1, 20)
+toolbarDivider:SetColorTexture(Theme.Hex(Theme.Colors.divider))
+toolbarDivider:SetPoint("RIGHT", exportButton, "LEFT", -10, 0)
+
+local openPbarButton = Theme.CreateButton(toolbar, {
+	text = "Open pbar", width = 82, height = 20, variant = "outline-gold",
+	onClick = function()
+		if CBAB.Bar_SetShown then CBAB.Bar_SetShown(true) end
+	end,
+})
+openPbarButton:SetPoint("RIGHT", toolbarDivider, "LEFT", -10, 0)
+
+local petsLabel = toolbar:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(petsLabel, "Body", { color = "textSecondary" })
+petsLabel:SetText("Pets in pbar")
+petsLabel:SetPoint("RIGHT", openPbarButton, "LEFT", -8, 0)
+
+local petsToggle = Theme.CreateToggle(toolbar, {
+	onClick = function(self, checked)
+		local profile = CBAB.DB:Profile()
+		if profile and profile.wants then
+			profile.wants.petsEnabled = checked
+			profile.modified = time()
+			CBAB:Fire("ASSIGNMENT_CHANGED")
+		end
+	end,
+})
+petsToggle:SetPoint("RIGHT", petsLabel, "LEFT", -8, 0)
+
 -- ============================================================
--- pbar entry point + pet-display toggle. The roster page is where a
--- leader plans, so both live here as a convenience alongside the profile
--- switcher -- /cbab pbar and Config's own controls still work unchanged.
+-- Body: main scroll (Paladins/Tanks tables + Class Headcounts input, left)
+-- and the fixed Solve rail (right). Two independent regions instead of one
+-- shared scroll area -- this is the fix for the pre-redesign double-
+-- scrollbar (README: "Fixes the old double-scrollbar").
 -- ============================================================
 
-local openPbarButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-openPbarButton:SetSize(80, 20)
-openPbarButton:SetPoint("TOPLEFT", profileDropdownLabel, "BOTTOMLEFT", 0, -10)
-openPbarButton:SetText("Open pbar")
-openPbarButton:SetScript("OnClick", function()
-	if CBAB.Bar_SetShown then CBAB.Bar_SetShown(true) end
-end)
+local FOOTER_CLEARANCE = 100 -- leaves room for the Export/Import string box below
 
-local showPetsCheckbox = CreateFrame("CheckButton", nil, window, "UICheckButtonTemplate")
-showPetsCheckbox:SetSize(18, 18)
-showPetsCheckbox:SetPoint("LEFT", openPbarButton, "RIGHT", 12, 0)
-local showPetsLabel = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-showPetsLabel:SetPoint("LEFT", showPetsCheckbox, "RIGHT", 4, 0)
-showPetsLabel:SetText("Show pets in pbar (this profile)")
-showPetsCheckbox:SetScript("OnClick", function(self)
-	local profile = CBAB.DB:Profile()
-	if profile and profile.wants then
-		profile.wants.petsEnabled = self:GetChecked() and true or false
-		profile.modified = time()
-		CBAB:Fire("ASSIGNMENT_CHANGED")
-	end
-end)
-
--- ============================================================
--- Scroll region holding all three sections
--- ============================================================
+local rail = CreateFrame("Frame", nil, window)
+rail:SetWidth(RAIL_WIDTH)
+rail:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", 0, -14)
+rail:SetPoint("BOTTOM", window, "BOTTOM", 0, FOOTER_CLEARANCE)
+CBAB:ApplyBackdrop(rail, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+rail:SetBackdropColor(Theme.HexA("000000", 0.18))
+rail:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderSubtle))
 
 local scrollFrame = CreateFrame("ScrollFrame", "CBABuffRosterScroll", window, "UIPanelScrollFrameTemplate")
-scrollFrame:SetPoint("TOPLEFT", 12, -128)
-scrollFrame:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -SCROLLBAR_CLEARANCE, 130)
+scrollFrame:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", 0, -14)
+scrollFrame:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", 14, FOOTER_CLEARANCE)
+scrollFrame:SetPoint("RIGHT", rail, "LEFT", -14, 0)
 
 local content = CreateFrame("Frame", nil, scrollFrame)
 content:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
 scrollFrame:SetScrollChild(content)
 
 -- ============================================================
--- Section separators
+-- Section separators (main scroll)
 -- ============================================================
 
-local function createSeparator(iconTexture, iconCoords, titleText, titleColorHex)
+local function createSeparator(iconTexture, iconCoords, titleLabel, titleClass)
 	local sep = CreateFrame("Frame", nil, content)
 	sep:SetSize(CONTENT_WIDTH, HEADER_HEIGHT)
 
@@ -309,15 +437,26 @@ local function createSeparator(iconTexture, iconCoords, titleText, titleColorHex
 		titleX = 26
 	end
 
-	local titleFS = sep:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local titleFS = sep:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(titleFS, "SectionHeader", { spacing = 1.5 })
 	titleFS:SetPoint("LEFT", titleX, 0)
-	titleFS:SetText(titleColorHex and ("|c" .. titleColorHex .. titleText .. "|r") or titleText)
+	-- Manual :upper() here rather than Theme.StyleText's opts.upper wrapper:
+	-- a class-colored header embeds a "|cffRRGGBB...|r" escape, and WoW's
+	-- escape parser is case-sensitive -- the wrapper's blanket :upper() would
+	-- turn "|c"/"|r" into unrecognized "|C"/"|R" and break the color code.
+	local displayText = titleLabel:upper()
+	if titleClass then
+		titleFS:SetText("|cff" .. classHex(titleClass) .. displayText .. "|r")
+	else
+		titleFS:SetText(displayText)
+		titleFS:SetTextColor(Theme.C("textPrimary"))
+	end
 
 	local line = sep:CreateTexture(nil, "ARTWORK")
 	line:SetHeight(1)
 	line:SetPoint("LEFT", titleFS, "RIGHT", 8, 0)
 	line:SetPoint("RIGHT", sep, "RIGHT", -4, 0)
-	line:SetColorTexture(1, 1, 1, 0.25)
+	line:SetColorTexture(Theme.HexA(Theme.Colors.divider, 0.7))
 
 	return sep
 end
@@ -326,33 +465,33 @@ local function createColumnHeader(labels)
 	local ch = CreateFrame("Frame", nil, content)
 	ch:SetSize(CONTENT_WIDTH, COLHEAD_HEIGHT)
 	for _, l in ipairs(labels) do
-		local fs = ch:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		local fs = ch:CreateFontString(nil, "OVERLAY")
+		Theme.StyleText(fs, "ColumnLabel", { color = "textFaint", spacing = 1 })
 		fs:SetPoint("LEFT", l.x, 0)
 		fs:SetWidth(l.width)
 		fs:SetJustifyH("LEFT")
-		fs:SetText(l.text)
+		fs:SetText(l.text:upper())
 	end
 	return ch
 end
 
-local paladinColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS.PALADIN and RAID_CLASS_COLORS.PALADIN.colorStr
 local paladinIconCoords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS.PALADIN
 
 local paladinHeader = createSeparator(
 	"Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes",
 	paladinIconCoords,
 	"Paladins",
-	paladinColor
+	"PALADIN"
 )
 local paladinColHeader = createColumnHeader({
-	{ text = "Name", x = 6, width = 110 },
-	{ text = "Tank", x = 150, width = 34 },
-	{ text = "Spec (opt.)", x = 178, width = 62 },
-	{ text = "Assign", x = 242 + DD_TEXT_INSET, width = 90 },
+	{ text = "Name", x = PAL_NAME_X, width = 110 },
+	{ text = "Tank", x = PAL_TANK_X, width = 34 },
+	{ text = "Spec (opt.)", x = PAL_SPEC_X, width = 62 },
+	{ text = "Assign", x = PAL_ASSIGN_X + DD_TEXT_INSET, width = 90 },
 	-- Aura is manual-only (no solver slot construction, see SPEC.md's v1
 	-- aura scope note) -- this column has no "assumed" auto-fill or
 	-- override-warning the way Assign does, it's just a direct pick.
-	{ text = "Aura", x = 340 + DD_TEXT_INSET, width = 70 },
+	{ text = "Aura", x = PAL_AURA_X + DD_TEXT_INSET, width = 70 },
 })
 
 -- Generic "shield" flavoring for the Tanks separator (spec: "prot warrior
@@ -364,10 +503,6 @@ local tankHeader = createSeparator(
 	"Tanks",
 	nil
 )
--- Shared x for the tank row's dropdown frames, reused by the row builder
--- below so headers and dropdowns can't drift apart.
-local TANK_CLASS_DD_X = 136
-local TANK_BUFF_DD_X = { 214, 278, 342, 406 }
 local tankColHeader = createColumnHeader({
 	{ text = "Name", x = 6, width = 100 },
 	{ text = "Class", x = TANK_CLASS_DD_X + DD_TEXT_INSET, width = 60 },
@@ -377,16 +512,7 @@ local tankColHeader = createColumnHeader({
 	{ text = "Buff 4", x = TANK_BUFF_DD_X[4] + DD_TEXT_INSET, width = 50 },
 })
 
--- Assignments section (spec 11.1, folded in from the removed standalone
--- editor). Blessing-flavored icon to set it apart from the class table.
-local assignHeader = createSeparator(
-	"Interface\\Icons\\Spell_Holy_GreaterBlessingofKings",
-	nil,
-	"Assignments",
-	nil
-)
-
--- Generic separator style, no icon (spec: "use generic style").
+-- Generic separator style, no icon/class-color (spec: "use generic style").
 local classHeader = createSeparator(nil, nil, "Class Headcounts", nil)
 
 -- ============================================================
@@ -395,14 +521,28 @@ local classHeader = createSeparator(nil, nil, "Class Headcounts", nil)
 
 local palRows = {}
 
+-- Every row gets a faint card backdrop (README "Elevated row fill") plus a
+-- hover highlight -- shared by paladin/tank rows since both use the same
+-- card look.
+local function applyRowCard(row)
+	CBAB:ApplyBackdrop(row, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	row:SetBackdropColor(Theme.HexA("ffffff", 0.013))
+	row:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderSubtle))
+	row:EnableMouse(true)
+	Theme.ApplyHoverHighlight(row, { hoverAlpha = 0.05, pressAlpha = 0.02 })
+end
+
 local function createPaladinRow(index)
 	local row = CreateFrame("Frame", nil, content)
 	row:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
+	applyRowCard(row)
 
 	row.nameBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	row.nameBox:SetSize(110, 18)
-	row.nameBox:SetPoint("LEFT", 6, 0)
+	row.nameBox:SetPoint("LEFT", PAL_NAME_X, 0)
 	row.nameBox:SetAutoFocus(false)
+	-- Paladin name (README type scale: "Name (class-colored)").
+	row.nameBox:SetTextColor(Theme.HexA(classHex("PALADIN"), 1))
 
 	-- Delete X sits right after the name (per request), and is bigger.
 	row.deleteButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
@@ -411,23 +551,30 @@ local function createPaladinRow(index)
 
 	row.tank = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
 	row.tank:SetSize(18, 18)
-	row.tank:SetPoint("LEFT", 150, 0)
+	row.tank:SetPoint("LEFT", PAL_TANK_X, 0)
 
 	row.specBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	row.specBox:SetSize(58, 14)
-	row.specBox:SetPoint("LEFT", 182, 0)
+	row.specBox:SetPoint("LEFT", PAL_SPEC_X, 0)
 	row.specBox:SetAutoFocus(false)
 	row.specBox:SetFontObject(GameFontDisableSmall)
 
+	row.assignDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
+	row.assignDot:SetPoint("LEFT", PAL_ASSIGN_DOT_X, 0)
+
 	row.assignDropdown = CreateFrame("Frame", "CBABuffRosterPalAssignDD" .. index, row, "UIDropDownMenuTemplate")
-	row.assignDropdown:SetPoint("LEFT", 242, 0)
-	UIDropDownMenu_SetWidth(row.assignDropdown, 90)
+	row.assignDropdown:SetPoint("LEFT", PAL_ASSIGN_X, 0)
+	UIDropDownMenu_SetWidth(row.assignDropdown, PAL_ASSIGN_WIDTH)
+
+	row.auraDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
+	row.auraDot:SetPoint("LEFT", PAL_AURA_DOT_X, 0)
 
 	row.auraDropdown = CreateFrame("Frame", "CBABuffRosterPalAuraDD" .. index, row, "UIDropDownMenuTemplate")
-	row.auraDropdown:SetPoint("LEFT", 340, 0)
-	UIDropDownMenu_SetWidth(row.auraDropdown, 70)
+	row.auraDropdown:SetPoint("LEFT", PAL_AURA_X, 0)
+	UIDropDownMenu_SetWidth(row.auraDropdown, PAL_AURA_WIDTH)
 
-	row.warningText = row:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
+	row.warningText = row:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.warningText, "Body", { color = "redText" })
 	row.warningText:SetPoint("LEFT", row.auraDropdown, "RIGHT", 6, 2)
 	row.warningText:SetWidth(130)
 	row.warningText:SetJustifyH("LEFT")
@@ -518,6 +665,7 @@ local tankRows = {}
 local function createTankRow(index)
 	local row = CreateFrame("Frame", nil, content)
 	row:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
+	applyRowCard(row)
 
 	row.nameBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	row.nameBox:SetSize(100, 18)
@@ -529,18 +677,26 @@ local function createTankRow(index)
 	row.deleteButton:SetSize(DELETE_SIZE, DELETE_SIZE)
 	row.deleteButton:SetPoint("LEFT", row.nameBox, "RIGHT", 0, 0)
 
+	row.classDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
+	row.classDot:SetPoint("LEFT", TANK_CLASS_DOT_X, 0)
+
 	row.classDropdown = CreateFrame("Frame", "CBABuffRosterTankClassDD" .. index, row, "UIDropDownMenuTemplate")
 	-- Fixed x (shared with the header, above) instead of chaining relative
 	-- offsets, so headers and dropdowns stay aligned regardless of the
 	-- template's internal padding.
 	row.classDropdown:SetPoint("LEFT", TANK_CLASS_DD_X, 0)
-	UIDropDownMenu_SetWidth(row.classDropdown, 60)
+	UIDropDownMenu_SetWidth(row.classDropdown, TANK_CLASS_DD_WIDTH)
 
+	row.buffDots = {}
 	row.buffDropdowns = {}
 	for slot = 1, 4 do
+		local dot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
+		dot:SetPoint("LEFT", TANK_BUFF_DOT_X[slot], 0)
+		row.buffDots[slot] = dot
+
 		local dd = CreateFrame("Frame", ("CBABuffRosterTankBuffDD%d_%d"):format(index, slot), row, "UIDropDownMenuTemplate")
 		dd:SetPoint("LEFT", TANK_BUFF_DD_X[slot], 0)
-		UIDropDownMenu_SetWidth(dd, 50)
+		UIDropDownMenu_SetWidth(dd, TANK_BUFF_DD_WIDTH)
 		row.buffDropdowns[slot] = dd
 	end
 
@@ -609,7 +765,9 @@ local function getTankRow(index)
 end
 
 -- ============================================================
--- Class/spec headcount rows -- fixed one-per-class, never grows.
+-- Class/spec headcount rows -- fixed one-per-class, never grows. Manual
+-- planning input (see file header) -- not the handoff's read-only rail
+-- chips, which are a separate, simpler summary of this same data.
 -- ============================================================
 
 local classRows = {}
@@ -627,16 +785,19 @@ local function createClassRow(class)
 		icon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
 	end
 
-	local label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	local label = row:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(label, "ColumnLabel")
+	label:SetTextColor(Theme.HexA(classHex(class), 1))
 	label:SetPoint("LEFT", 26, 0)
 	label:SetWidth(90)
 	label:SetJustifyH("LEFT")
-	label:SetText(classLabel(class))
+	label:SetText(class:sub(1, 1) .. class:sub(2):lower())
 
 	row.specBoxes = {}
 	local anchor = label
 	for i, spec in ipairs(CBAB.ClassSpecs[class]) do
-		local specLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+		local specLabel = row:CreateFontString(nil, "OVERLAY")
+		Theme.StyleText(specLabel, "ColumnLabel", { color = "textFaint" })
 		specLabel:SetPoint("LEFT", anchor, "RIGHT", i == 1 and 10 or 16, 0)
 		specLabel:SetWidth(38)
 		specLabel:SetJustifyH("LEFT")
@@ -673,15 +834,15 @@ for _, class in ipairs(CBAB.ClassOrder) do
 end
 
 -- ============================================================
--- Assignments section (folded in from the removed standalone editor,
--- spec 11.1). Computes a PLANNED assignment from the profile roster --
--- not from live raid data -- by running the real pure solver
--- (Solver/Assign.lua) against the roster page's own inputs: each
--- paladin's Assign column (override or the assumed default), the Tanks
--- section's per-tank want-lists, and the Class Headcounts majority for
--- Might vs Wisdom. This is what lets a leader see and commit a plan
--- BEFORE the raid forms (spec 7). With no headcount and no live data the
--- majority defaults to Might primary / Wisdom secondary.
+-- Planned assignment (shared by the rail's Resolved/Warnings/stat chips).
+-- Computes a PLANNED assignment from the profile roster -- not from live
+-- raid data -- by running the real pure solver (Solver/Assign.lua) against
+-- the roster window's own inputs: each paladin's Assign column (override or
+-- the assumed default), the Tanks section's per-tank want-lists, and the
+-- Class Headcounts majority for Might vs Wisdom. This is what lets a
+-- leader see and commit a plan BEFORE the raid forms (spec 7). With no
+-- headcount and no live data the majority defaults to Might primary /
+-- Wisdom secondary.
 --
 -- The display is a live preview, recomputed every refresh. "Solve (plan)"
 -- commits that same preview to profile.assignment and fires
@@ -782,83 +943,172 @@ local function paladinAssignmentSummary(paladinName, assignment, slotBlessing)
 	return greaterParts, overrideParts
 end
 
-local assignSolveButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-assignSolveButton:SetSize(96, 22)
-assignSolveButton:SetText("Solve (plan)")
+-- ============================================================
+-- Solve rail (fixed, right). README: Solve/Push, three stat chips, a
+-- Resolved list, a Warnings list, and class headcount chips at the bottom.
+-- The Resolved/Warnings lists share one small inner scroll frame between
+-- the stat chips and the headcount chips -- the handoff's rail doesn't
+-- scroll WITH the tables, but doesn't say its own contents can never
+-- overflow a 25-raider list, so this keeps the rail itself fixed in place
+-- while still coping with a full raid.
+-- ============================================================
 
-local assignPushButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-assignPushButton:SetSize(100, 22)
-assignPushButton:SetText("Push to raid")
+local RAIL_PAD = 10
 
--- Sync (pull assignment) and Report (raid-chat summary) used to be pbar
--- toolbar buttons. The redesigned Combat Strip (UI/Bar.lua) has no
--- toolbar, so they live here now, next to Solve/Push -- same rail, same
--- "coordinator plans here" spirit. Handlers are unchanged from the old
--- pbar buttons, just relocated.
-local assignSyncButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-assignSyncButton:SetSize(56, 22)
-assignSyncButton:SetText("Sync")
-assignSyncButton:SetScript("OnClick", function() CBAB.Comm:Hello() end)
+local solveButton = Theme.CreateButton(rail, {
+	text = "Solve (plan)", width = 122, height = 24, variant = "primary",
+	onClick = function() doSolvePlan() end,
+})
+solveButton:SetPoint("TOPLEFT", rail, "TOPLEFT", RAIL_PAD, -RAIL_PAD)
 
-local assignReportButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-assignReportButton:SetSize(64, 22)
-assignReportButton:SetText("Report")
-assignReportButton:SetScript("OnClick", function() CBAB.PostReport() end)
+local pushButton = Theme.CreateButton(rail, {
+	text = "Push to raid", width = 110, height = 24, variant = "outline-blue",
+	onClick = function() CBAB.Comm:PushAssignment() end,
+})
+pushButton:SetPoint("LEFT", solveButton, "RIGHT", 8, 0)
 
-local assignStatusText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-assignStatusText:SetJustifyH("LEFT")
-assignStatusText:SetWidth(CONTENT_WIDTH - 220 - 136)
+local syncButton = Theme.CreateButton(rail, {
+	text = "Sync", width = 70, height = 20,
+	onClick = function() CBAB.Comm:Hello() end,
+})
+syncButton:SetPoint("TOPLEFT", solveButton, "BOTTOMLEFT", 0, -8)
 
-local assignRows = {}
-local function getAssignRow(i)
-	local fs = assignRows[i]
-	if not fs then
-		fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		fs:SetJustifyH("LEFT")
-		fs:SetWidth(CONTENT_WIDTH - 12)
-		fs:SetWordWrap(false)
-		assignRows[i] = fs
-	end
-	return fs
+local reportButton = Theme.CreateButton(rail, {
+	text = "Report", width = 70, height = 20,
+	onClick = function() CBAB.PostReport() end,
+})
+reportButton:SetPoint("LEFT", syncButton, "RIGHT", 8, 0)
+
+local function createStatChip(parent, colorKey, textColorKey)
+	local chip = CreateFrame("Frame", nil, parent)
+	chip:SetHeight(22)
+	CBAB:ApplyBackdrop(chip, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	chip:SetBackdropColor(Theme.HexA(Theme.Colors[colorKey], 0.12))
+	chip:SetBackdropBorderColor(Theme.HexA(Theme.Colors[colorKey], 0.45))
+	local text = chip:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(text, "ButtonLabel", { color = textColorKey })
+	text:SetPoint("CENTER")
+	chip.text = text
+	return chip
 end
 
-local validatorRows = {}
-local function getValidatorRow(i)
-	local fs = validatorRows[i]
-	if not fs then
-		fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		fs:SetJustifyH("LEFT")
-		fs:SetWidth(CONTENT_WIDTH - 12)
-		validatorRows[i] = fs
-	end
-	return fs
+local statChipOverrides = createStatChip(rail, "gold", "goldText2")
+statChipOverrides:SetSize(86, 22)
+statChipOverrides:SetPoint("TOPLEFT", syncButton, "BOTTOMLEFT", 0, -10)
+
+local statChipErrors = createStatChip(rail, "red", "redText")
+statChipErrors:SetSize(86, 22)
+statChipErrors:SetPoint("LEFT", statChipOverrides, "RIGHT", 6, 0)
+
+local statChipWarns = createStatChip(rail, "teal", "tealText")
+statChipWarns:SetSize(86, 22)
+statChipWarns:SetPoint("LEFT", statChipErrors, "RIGHT", 6, 0)
+
+local resolvedHeaderLabel = rail:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(resolvedHeaderLabel, "ColumnLabel", { color = "textFaint" })
+resolvedHeaderLabel:SetPoint("TOPLEFT", statChipOverrides, "BOTTOMLEFT", 0, -12)
+resolvedHeaderLabel:SetText(("Resolved"):upper())
+
+-- Class headcount chips, anchored to the rail's bottom edge (README:
+-- "Class headcount chips at bottom"). One chip per CBAB.ClassOrder class,
+-- always present (0 when a class has no manual headcount), wrapped 3-per-
+-- row -- read-only, purely a summary of the Class Headcounts input above.
+local CLASS_CHIP_WIDTH, CLASS_CHIP_GAP, CLASS_CHIP_ROW_HEIGHT, CLASS_CHIPS_PER_ROW = 86, 6, 18, 3
+local classChipRows = math.ceil(#CBAB.ClassOrder / CLASS_CHIPS_PER_ROW)
+
+local classChipsContainer = CreateFrame("Frame", nil, rail)
+classChipsContainer:SetPoint("BOTTOMLEFT", rail, "BOTTOMLEFT", RAIL_PAD, RAIL_PAD)
+classChipsContainer:SetPoint("BOTTOMRIGHT", rail, "BOTTOMRIGHT", -RAIL_PAD, RAIL_PAD)
+classChipsContainer:SetHeight(classChipRows * CLASS_CHIP_ROW_HEIGHT)
+
+local classChips = {}
+for i, class in ipairs(CBAB.ClassOrder) do
+	local col = (i - 1) % CLASS_CHIPS_PER_ROW
+	local row = math.floor((i - 1) / CLASS_CHIPS_PER_ROW)
+	local chip = CreateFrame("Frame", nil, classChipsContainer)
+	chip:SetSize(CLASS_CHIP_WIDTH, CLASS_CHIP_ROW_HEIGHT)
+	chip:SetPoint("TOPLEFT", classChipsContainer, "TOPLEFT", col * (CLASS_CHIP_WIDTH + CLASS_CHIP_GAP), -row * CLASS_CHIP_ROW_HEIGHT)
+
+	local dot = Theme.CreateDot(chip, classHex(class), 6)
+	dot:SetPoint("LEFT", 2, 0)
+
+	local text = chip:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(text, "ColumnLabel")
+	text:SetTextColor(Theme.HexA(classHex(class), 1))
+	text:SetPoint("LEFT", dot, "RIGHT", 5, 0)
+	chip.text = text
+
+	classChips[class] = chip
 end
 
-local function doSolvePlan()
-	local profile = CBAB.DB:Profile()
-	if not profile then
-		CBAB:Print("no active profile")
-		return
-	end
-	local assignment = buildPlannedAssignment(profile)
-	assignment.epoch = (profile.assignment and profile.assignment.epoch or 0) + 1
-	assignment.author = UnitName("player")
-	assignment.timestamp = time()
-	-- Not pushed yet (spec 8): Comm:PushAssignment marks it "pushed".
-	assignment.source = "local"
-	-- assignment.auras is already populated by buildPlannedAssignment above,
-	-- straight from each paladin row's own Aura dropdown.
-	profile.assignment = assignment
-	profile.modified = time()
-	CBAB:Print(("solved plan for '%s' -- %d override(s). Push to raid when ready."):format(
-		profile.name, #assignment.overrides))
-	-- Fires the roster page's own refresh AND the paladin bar's, so both
-	-- reflect the just-committed plan (this is the pbar-wiring fix).
-	CBAB:Fire("ASSIGNMENT_CHANGED")
+-- Inner scroll for Resolved + Warnings, filling the rail between the stat
+-- chips/"Resolved" label and the class chips at the bottom.
+local railListScroll = CreateFrame("ScrollFrame", "CBABuffRosterRailScroll", rail, "UIPanelScrollFrameTemplate")
+railListScroll:SetPoint("TOPLEFT", resolvedHeaderLabel, "BOTTOMLEFT", 0, -4)
+railListScroll:SetPoint("RIGHT", rail, "RIGHT", -RAIL_PAD, 0)
+railListScroll:SetPoint("BOTTOM", classChipsContainer, "TOP", 0, 10)
+
+local railListContent = CreateFrame("Frame", nil, railListScroll)
+railListContent:SetSize(1, 1)
+railListScroll:SetScrollChild(railListContent)
+
+local RAIL_LIST_WIDTH = RAIL_WIDTH - 2 * RAIL_PAD - 26 -- clears the template's own scrollbar
+
+-- Shared list-row builder: a small color dot + one line of text, used for
+-- both the Resolved list and the red-tinted Warnings list (README: "red-
+-- tinted rows (dot + text)").
+local function createRailListRow()
+	local row = CreateFrame("Frame", nil, railListContent)
+	row:SetSize(RAIL_LIST_WIDTH, 16)
+	row.dot = Theme.CreateDot(row, Theme.Colors.textFaint, 6)
+	row.dot:SetPoint("LEFT", 2, 1)
+	row.text = row:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.text, "Body", { color = "textSecondary" })
+	row.text:SetPoint("LEFT", row.dot, "RIGHT", 6, 0)
+	row.text:SetWidth(RAIL_LIST_WIDTH - 12)
+	row.text:SetJustifyH("LEFT")
+	row.text:SetWordWrap(false)
+	return row
 end
 
-assignSolveButton:SetScript("OnClick", doSolvePlan)
-assignPushButton:SetScript("OnClick", function() CBAB.Comm:PushAssignment() end)
+local railListRows = {}
+local function getRailListRow(i)
+	local row = railListRows[i]
+	if not row then
+		row = createRailListRow()
+		railListRows[i] = row
+	end
+	return row
+end
+
+-- ============================================================
+-- Footer: Export/Import paste box. The buttons themselves live in the
+-- toolbar now (README puts Export/Import in the profile toolbar row) --
+-- this panel is just the persistent copy/paste surface, since WoW has no
+-- native modal dialog to pop one up in only when needed.
+-- ============================================================
+
+local ioLabel = window:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(ioLabel, "ColumnLabel", { color = "textFaint" })
+ioLabel:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", 14, 86)
+ioLabel:SetText(("Export / Import String"):upper())
+
+local ioScroll = CreateFrame("ScrollFrame", "CBABuffRosterIOScroll", window, "UIPanelScrollFrameTemplate")
+ioScroll:SetPoint("TOPLEFT", ioLabel, "BOTTOMLEFT", 0, -4)
+ioScroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -34, 14)
+CBAB:ApplyBackdrop(ioScroll, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+ioScroll:SetBackdropColor(Theme.Hex(Theme.Colors.fieldFill))
+ioScroll:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControl))
+
+ioBox = CreateFrame("EditBox", nil, ioScroll)
+ioBox:SetMultiLine(true)
+ioBox:SetAutoFocus(false)
+ioBox:SetFontObject(ChatFontNormal)
+ioBox:SetTextColor(Theme.C("textPrimary"))
+ioBox:SetWidth(WINDOW_WIDTH - 34 - 34)
+ioBox:SetHeight(200)
+ioBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+ioScroll:SetScrollChild(ioBox)
 
 -- ============================================================
 -- Commit: scans both growing sections' CURRENT widget state and merges
@@ -957,73 +1207,121 @@ commitAll = function()
 	profile.modified = time()
 end
 
--- ============================================================
--- Export / Import
--- ============================================================
-
-local ioScroll = CreateFrame("ScrollFrame", "CBABuffRosterIOScroll", window, "UIPanelScrollFrameTemplate")
-ioScroll:SetPoint("BOTTOMLEFT", 12, 44)
-ioScroll:SetPoint("BOTTOMRIGHT", -SCROLLBAR_CLEARANCE, 44)
-ioScroll:SetHeight(70)
-
-local ioBox = CreateFrame("EditBox", nil, ioScroll)
-ioBox:SetMultiLine(true)
-ioBox:SetAutoFocus(false)
-ioBox:SetFontObject(ChatFontNormal)
-ioBox:SetWidth(440)
-ioBox:SetHeight(200)
-ioBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-ioScroll:SetScrollChild(ioBox)
-
-local exportButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-exportButton:SetSize(80, 20)
-exportButton:SetPoint("BOTTOMLEFT", 12, 12)
-exportButton:SetText("Export")
-exportButton:SetScript("OnClick", function()
+doSolvePlan = function()
 	local profile = CBAB.DB:Profile()
 	if not profile then
-		CBAB:Print("no active profile to export")
+		CBAB:Print("no active profile")
 		return
 	end
-	local str, err = CBAB.DB:Export(profile.name)
-	if not str then
-		CBAB:Print(err)
-		return
-	end
-	ioBox:SetText(str)
-	ioBox:HighlightText()
-	ioBox:SetFocus()
-end)
+	local assignment = buildPlannedAssignment(profile)
+	assignment.epoch = (profile.assignment and profile.assignment.epoch or 0) + 1
+	assignment.author = UnitName("player")
+	assignment.timestamp = time()
+	-- Not pushed yet (spec 8): Comm:PushAssignment marks it "pushed".
+	assignment.source = "local"
+	-- assignment.auras is already populated by buildPlannedAssignment above,
+	-- straight from each paladin row's own Aura dropdown.
+	profile.assignment = assignment
+	profile.modified = time()
+	CBAB:Print(("solved plan for '%s' -- %d override(s). Push to raid when ready."):format(
+		profile.name, #assignment.overrides))
+	-- Fires the roster page's own refresh AND the paladin bar's, so both
+	-- reflect the just-committed plan (this is the pbar-wiring fix).
+	CBAB:Fire("ASSIGNMENT_CHANGED")
+end
 
-local importButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-importButton:SetSize(80, 20)
-importButton:SetPoint("LEFT", exportButton, "RIGHT", 8, 0)
-importButton:SetText("Import")
-importButton:SetScript("OnClick", function()
-	local text = ioBox:GetText()
-	local ok, err = CBAB.DB:Import(text)
-	if ok then
-		CBAB:Print("import succeeded")
+-- ============================================================
+-- Refresh: lays out the main scroll's sections top-to-bottom with a
+-- running cursor (row counts change independently every edit), then the
+-- fixed rail separately from its own cursor.
+-- ============================================================
+
+local function refreshRail(profile)
+	local assignment, validation, paladins, slotByName = buildPlannedAssignment(profile)
+
+	local errorCount, warnCount = 0, 0
+	for _, f in ipairs(validation) do
+		if f.level == "error" then errorCount = errorCount + 1 else warnCount = warnCount + 1 end
+	end
+	statChipOverrides.text:SetText(("%d override%s"):format(#assignment.overrides, #assignment.overrides == 1 and "" or "s"))
+	statChipErrors.text:SetText(("%d error%s"):format(errorCount, errorCount == 1 and "" or "s"))
+	statChipWarns.text:SetText(("%d warn%s"):format(warnCount, warnCount == 1 and "" or "s"))
+	pushButton:SetEnabled(errorCount == 0)
+
+	local y, rowIndex = 0, 0
+	if #paladins == 0 then
+		rowIndex = rowIndex + 1
+		local row = getRailListRow(rowIndex)
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", railListContent, "TOPLEFT", 0, y)
+		row.dot:SetColorTexture(Theme.Hex(Theme.Colors.textFaint))
+		row.text:SetText("No paladins in the roster yet.")
+		row:Show()
+		y = y - 16
 	else
-		CBAB:Print("import failed: " .. tostring(err))
-	end
-	refreshAll()
-end)
+		for _, p in ipairs(paladins) do
+			rowIndex = rowIndex + 1
+			local row = getRailListRow(rowIndex)
+			row:ClearAllPoints()
+			row:SetPoint("TOPLEFT", railListContent, "TOPLEFT", 0, y)
 
--- ============================================================
--- Refresh: lays out all three sections top-to-bottom with a running
--- cursor, since each one's row count changes independently every edit.
--- ============================================================
+			local slotBlessing = slotByName[p.name]
+			local tint = slotBlessing and Theme.BlessingTint(slotBlessing)
+			if tint then
+				row.dot:SetColorTexture(tint.solid[1], tint.solid[2], tint.solid[3])
+			else
+				row.dot:SetColorTexture(Theme.Hex(classHex("PALADIN")))
+			end
+
+			local greaterParts, overrideParts = paladinAssignmentSummary(p.name, assignment, slotBlessing)
+			local greaterText = #greaterParts > 0 and table.concat(greaterParts, ", ") or "no greater slot"
+			local line = ("|cff%s%s|r: %s"):format(classHex("PALADIN"), p.name, greaterText)
+			if #overrideParts > 0 then
+				line = line .. "  |c" .. Theme.ColorCode("gold") .. "[" .. table.concat(overrideParts, ", ") .. "]|r"
+			end
+			row.text:SetText(line)
+			row:Show()
+			y = y - 16
+		end
+	end
+
+	if #validation > 0 then
+		y = y - 6
+		for _, f in ipairs(validation) do
+			rowIndex = rowIndex + 1
+			local row = getRailListRow(rowIndex)
+			row:ClearAllPoints()
+			row:SetPoint("TOPLEFT", railListContent, "TOPLEFT", 0, y)
+			local colorKey = (f.level == "error") and "red" or "gold"
+			row.dot:SetColorTexture(Theme.Hex(Theme.Colors[colorKey]))
+			row.text:SetText(("|c%s[%s]|r %s"):format(Theme.ColorCode(colorKey), f.level:upper(), f.message))
+			row:Show()
+			y = y - 16
+		end
+	end
+
+	for i = rowIndex + 1, #railListRows do
+		railListRows[i]:Hide()
+	end
+	railListContent:SetSize(RAIL_LIST_WIDTH, math.max(1, -y))
+
+	local specCounts = profile.wants.specCounts or {}
+	for _, class in ipairs(CBAB.ClassOrder) do
+		local counts = specCounts[class] or {}
+		local total = 0
+		for _, n in pairs(counts) do total = total + (tonumber(n) or 0) end
+		classChips[class].text:SetText(("%s %d"):format(CLASS_ABBR[class], total))
+	end
+end
 
 refreshAll = function()
 	local profile = CBAB.DB:Profile()
 
-	activeProfileText:SetText(profile and ("Active: " .. profile.name) or "No active profile")
 	if profile and not profileNameBox:HasFocus() then
 		profileNameBox:SetText(profile.name)
 	end
 	UIDropDownMenu_SetText(profileDropdown, profile and profile.name or "Select profile")
-	showPetsCheckbox:SetChecked(profile and profile.wants and profile.wants.petsEnabled and true or false)
+	petsToggle:SetChecked(profile and profile.wants and profile.wants.petsEnabled and true or false)
 
 	if not profile then
 		for _, row in pairs(palRows) do row:Hide() end
@@ -1084,6 +1382,13 @@ refreshAll = function()
 		UIDropDownMenu_SetText(row.assignDropdown, blessingLabel(effective))
 		UIDropDownMenu_SetText(row.auraDropdown, auraLabel(row.state.auraOverride))
 
+		local assignTint = effective and Theme.BlessingTint(effective)
+		if assignTint then
+			row.assignDot:SetColorTexture(assignTint.solid[1], assignTint.solid[2], assignTint.solid[3])
+		else
+			row.assignDot:SetColorTexture(Theme.Hex(Theme.Colors.dashedEmpty))
+		end
+
 		if row.state.assignOverride and row.state.assignOverride ~= assumedBlessing then
 			row.warningText:SetText(("overridden -- assumed %s"):format(blessingLabel(assumedBlessing)))
 			row.warningText:Show()
@@ -1136,6 +1441,7 @@ refreshAll = function()
 		end
 
 		UIDropDownMenu_SetText(row.classDropdown, classLabel(row.state.class))
+		row.classDot:SetColorTexture(Theme.Hex(classHex(row.state.class)))
 
 		local defaultWants = (profile.wants.tanks and profile.wants.tanks[row.state.class]) or {}
 		for slot, dd in ipairs(row.buffDropdowns) do
@@ -1144,87 +1450,18 @@ refreshAll = function()
 				value = defaultWants[slot]
 			end
 			UIDropDownMenu_SetText(dd, value and blessingLabel(value) or "-")
+			local buffTint = value and Theme.BlessingTint(value)
+			if buffTint then
+				row.buffDots[slot]:SetColorTexture(buffTint.solid[1], buffTint.solid[2], buffTint.solid[3])
+			else
+				row.buffDots[slot]:SetColorTexture(Theme.Hex(Theme.Colors.dashedEmpty))
+			end
 		end
 
 		y = y - ROW_HEIGHT
 	end
 	for i = tankDisplayCount + 1, #tankRows do
 		tankRows[i]:Hide()
-	end
-
-	y = y - SECTION_GAP
-
-	-- Assignments -------------------------------------------------------
-	-- Live preview recomputed every refresh from the profile roster (not
-	-- live raid data) -- see buildPlannedAssignment's header.
-	local plannedAssignment, plannedValidation, plannedPaladins, plannedSlotByName = buildPlannedAssignment(profile)
-
-	assignHeader:ClearAllPoints()
-	assignHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-	y = y - HEADER_HEIGHT
-
-	assignSolveButton:ClearAllPoints()
-	assignSolveButton:SetPoint("TOPLEFT", content, "TOPLEFT", 6, y)
-	assignPushButton:ClearAllPoints()
-	assignPushButton:SetPoint("LEFT", assignSolveButton, "RIGHT", 8, 0)
-	assignSyncButton:ClearAllPoints()
-	assignSyncButton:SetPoint("LEFT", assignPushButton, "RIGHT", 8, 0)
-	assignReportButton:ClearAllPoints()
-	assignReportButton:SetPoint("LEFT", assignSyncButton, "RIGHT", 8, 0)
-	assignStatusText:ClearAllPoints()
-	assignStatusText:SetPoint("LEFT", assignReportButton, "RIGHT", 12, 0)
-
-	local errorCount, warnCount = 0, 0
-	for _, f in ipairs(plannedValidation) do
-		if f.level == "error" then errorCount = errorCount + 1 else warnCount = warnCount + 1 end
-	end
-	assignStatusText:SetText(("%d override(s)  |  %d error(s), %d warn(s)"):format(
-		#plannedAssignment.overrides, errorCount, warnCount))
-	assignPushButton:SetEnabled(errorCount == 0)
-	y = y - 28
-
-	local palColorHex = paladinColor or "ffffffff"
-	if #plannedPaladins == 0 then
-		local fs = getAssignRow(1)
-		fs:ClearAllPoints()
-		fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
-		fs:SetText("|cff888888No paladins in the roster yet -- add some above.|r")
-		fs:Show()
-		y = y - ROW_HEIGHT
-		for i = 2, #assignRows do assignRows[i]:Hide() end
-	else
-		for i, p in ipairs(plannedPaladins) do
-			local fs = getAssignRow(i)
-			fs:ClearAllPoints()
-			fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
-
-			local greaterParts, overrideParts = paladinAssignmentSummary(p.name, plannedAssignment, plannedSlotByName[p.name])
-			local greaterText = #greaterParts > 0 and table.concat(greaterParts, ", ") or "no greater slot"
-			local line = ("|c%s%s|r:  %s"):format(palColorHex, p.name, greaterText)
-			if #overrideParts > 0 then
-				line = line .. "   |cffffcc00[" .. table.concat(overrideParts, ", ") .. "]|r"
-			end
-			fs:SetText(line)
-			fs:Show()
-			y = y - ROW_HEIGHT
-		end
-		for i = #plannedPaladins + 1, #assignRows do assignRows[i]:Hide() end
-	end
-
-	for i, f in ipairs(plannedValidation) do
-		local fs = getValidatorRow(i)
-		fs:ClearAllPoints()
-		fs:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
-		if f.level == "error" then
-			fs:SetText("|cffff4444[ERROR]|r " .. f.message)
-		else
-			fs:SetText("|cffffcc00[warn]|r " .. f.message)
-		end
-		fs:Show()
-		y = y - 14
-	end
-	for i = #plannedValidation + 1, #validatorRows do
-		validatorRows[i]:Hide()
 	end
 
 	y = y - SECTION_GAP
@@ -1249,6 +1486,8 @@ refreshAll = function()
 	end
 
 	content:SetHeight(math.max(1, -y))
+
+	refreshRail(profile)
 end
 
 function CBAB.RosterPage:Toggle()

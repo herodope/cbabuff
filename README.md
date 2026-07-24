@@ -62,19 +62,24 @@ unusual build is just a capability record, and the addon never suggests a respec
 specs), `comm` (comm epoch table), `log` (opens the scrollable debug log window).
 
 You can do everything above from the UI too — the editor, roster page, and config page don't
-require chat commands. Left-clicking (not dragging) the small handle on the paladin bar also
-toggles the editor.
+require chat commands. The paladin bar itself has no click-to-open-editor affordance anymore
+(see below) — open the roster/config pages via `/cbab`/`/cbab config`, or their own "Open pbar"
+buttons to get back to the bar.
 
-## The paladin bar
+## The paladin bar ("Combat Strip")
 
-The bar's class buttons and the seal/Righteous Fury button are deliberately named
-`PallyPowerC1`–`PallyPowerC9` and `PallyPowerRF`, so **existing PallyPower macros work
-unmodified**:
+Redesigned per `UI/redesign/design_handoff_cba_buff/README.md`. One chevron cycles three states:
+a minimized status pill (coverage count or gap count), a compact "your casts" row (just your own
+castable buttons), and an expanded view showing every paladin's row — only yours is clickable,
+everyone else's is read-only coverage so you can spot overlaps and gaps at a glance. Size is
+remembered per character.
+
+The bar's class buttons are deliberately named `PallyPowerC1`–`PallyPowerC9`, so **existing
+PallyPower macros work unmodified**:
 
 ```
 /click PallyPowerC1 LeftButton Down     -- greater blessing on class button 1
 /click PallyPowerC1 RightButton Down    -- normal blessing on your current target
-/click PallyPowerRF LeftButton Down     -- Righteous Fury
 ```
 
 Button numbering isn't fixed to a class — like PallyPower, `C1` is whichever class (in the
@@ -85,8 +90,9 @@ refresh. **This is the only place the PallyPower name appears** — everything e
 Both addons loaded at once will fight over those button names; CBA Buff warns you once if it
 detects PallyPower is also loaded.
 
-The Righteous Fury button's right-click (seal) is not wired up yet — there's no way for the
-addon to know which seal you want without a settings UI that doesn't exist yet.
+There is no Righteous Fury or seal tracking — that button was removed in the redesign along with
+the drag-handle square. Sync (pull assignment) and Report (post a raid-chat summary) moved from
+the old bar toolbar to the Roster page's Solve rail, next to Solve/Push.
 
 ## Splits and profiles
 

@@ -117,6 +117,15 @@ function Theme.ClassColor(classToken)
 	return Theme.C("textSecondary")
 end
 
+-- 8-digit |cAARRGGBB code for embedding a Theme color (or any raw hex) in
+-- FontString:SetText rich text, e.g. "|c" .. Theme.ColorCode("red") .. "x|r".
+-- Kept separate from Theme.C (which returns 0-1 floats for SetTextColor)
+-- since chat/FontString color codes want a hex string, not floats.
+function Theme.ColorCode(nameOrHex)
+	local hex = Theme.Colors[nameOrHex] or nameOrHex
+	return "ff" .. hex:gsub("#", "")
+end
+
 -- Fill/border/label triad for a blessing's tinted tile (README "Tinting
 -- recipe"): fill mixes the blessing color at ~36% into the dark tile base,
 -- border at ~55%, label text at ~60% into white.
@@ -314,4 +323,154 @@ function Theme.ApplyInteractionState(frame, target)
 	frame:HookScript("OnLeave", function() apply(1) end)
 	frame:HookScript("OnMouseDown", function() apply(0.9) end)
 	frame:HookScript("OnMouseUp", function() apply(frame:IsMouseOver() and 1.17 or 1) end)
+end
+
+-- Additive white overlay used as the hover/press cue for chrome that has no
+-- icon texture to brighten (buttons, rows, chips) -- Theme.ApplyInteractionState
+-- above needs a Texture target, which plain backdrop buttons/rows don't have.
+-- Alpha stand-ins for the README's brightness()/scale() states since neither
+-- has a cheap backdrop-frame equivalent.
+function Theme.ApplyHoverHighlight(frame, opts)
+	opts = opts or {}
+	local hl = frame:CreateTexture(nil, "OVERLAY")
+	hl:SetAllPoints()
+	hl:SetColorTexture(1, 1, 1, 1)
+	hl:SetBlendMode("ADD")
+	hl:SetAlpha(0)
+	local hoverAlpha = opts.hoverAlpha or 0.07
+	local pressAlpha = opts.pressAlpha or 0.02
+	frame:HookScript("OnEnter", function() hl:SetAlpha(hoverAlpha) end)
+	frame:HookScript("OnLeave", function() hl:SetAlpha(0) end)
+	frame:HookScript("OnMouseDown", function() hl:SetAlpha(pressAlpha) end)
+	frame:HookScript("OnMouseUp", function() hl:SetAlpha(frame:IsMouseOver() and hoverAlpha or 0) end)
+	return hl
+end
+
+-- ============================================================
+-- Shared chrome builders: button and toggle. Roster/Config/Alert all need
+-- the same push-button and pill-toggle look (README Design Tokens / Config
+-- token spec) -- built once here so no surface re-derives colors locally.
+-- ============================================================
+
+-- variant: "primary" (gold filled) | "outline-gold" | "outline-blue" |
+-- "outline-red" | "neutral" (default, plain control fill).
+function Theme.CreateButton(parent, opts)
+	opts = opts or {}
+	local btn = CreateFrame("Button", opts.name, parent)
+	btn:SetSize(opts.width or 80, opts.height or 22)
+	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+
+	local variant = opts.variant or "neutral"
+	local labelColor
+	if variant == "primary" then
+		Theme.ApplyFill(btn, Theme.Colors.gold, Theme.Colors.goldDark, 1)
+		btn:SetBackdropBorderColor(Theme.Hex(Theme.Colors.goldDark))
+		labelColor = "tileDark" -- dark label for contrast on the bright gold fill
+	elseif variant == "outline-gold" then
+		btn:SetBackdropColor(Theme.HexA(Theme.Colors.gold, 0.1))
+		btn:SetBackdropBorderColor(Theme.HexA(Theme.Colors.gold, 0.55))
+		labelColor = "goldText2"
+	elseif variant == "outline-blue" then
+		btn:SetBackdropColor(Theme.HexA(Theme.Colors.blue, 0.14))
+		btn:SetBackdropBorderColor(Theme.Hex(Theme.Colors.blueBorder))
+		labelColor = "blue"
+	elseif variant == "outline-red" then
+		btn:SetBackdropColor(Theme.HexA(Theme.Colors.red, 0.1))
+		btn:SetBackdropBorderColor(Theme.HexA(Theme.Colors.red, 0.45))
+		labelColor = "redText"
+	else
+		btn:SetBackdropColor(Theme.Hex(Theme.Colors.controlFill))
+		btn:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+		labelColor = "textSecondary"
+	end
+
+	local label = btn:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(label, "ButtonLabel", { color = opts.textColor or labelColor, upper = opts.upper ~= false })
+	label:SetPoint("CENTER")
+	if opts.text then label:SetText(opts.text) end
+	btn.label = label
+
+	Theme.ApplyHoverHighlight(btn)
+	-- Native templates ship their own disabled texture; this plain backdrop
+	-- button has none, so SetEnabled(false) (e.g. Push to raid while the
+	-- plan has errors) would otherwise be invisible. Wrapping SetEnabled to
+	-- dim the whole button's alpha covers backdrop/border/label in one
+	-- call, since child regions compound their own alpha with the parent's.
+	local setEnabledBase = btn.SetEnabled
+	function btn:SetEnabled(enabled)
+		setEnabledBase(self, enabled)
+		self:SetAlpha(enabled and 1 or 0.55)
+	end
+	if opts.onClick then btn:SetScript("OnClick", opts.onClick) end
+	if opts.tooltip then
+		btn:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
+			GameTooltip:SetText(opts.tooltip)
+			GameTooltip:Show()
+		end)
+		btn:SetScript("OnLeave", GameTooltip_Hide)
+	end
+	return btn
+end
+
+-- 40x22 pill toggle (Config token spec: ON = teal track/knob, OFF = dark
+-- track/faint knob). WoW has no rounded-rect primitive to ship the CSS
+-- pill radius with -- square corners are the same approximation the rest
+-- of this file already uses for tiles/panels (see file header Fidelity
+-- note); the ON/OFF color and knob-slide read carries the design instead.
+function Theme.CreateToggle(parent, opts)
+	opts = opts or {}
+	local toggle = CreateFrame("Button", opts.name, parent)
+	toggle:SetSize(opts.width or 40, opts.height or 22)
+	CBAB:ApplyBackdrop(toggle, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+
+	local knob = toggle:CreateTexture(nil, "OVERLAY")
+	local knobSize = (opts.height or 22) - 6
+	knob:SetSize(knobSize, knobSize)
+	toggle.knob = knob
+	toggle.checked = opts.checked and true or false
+
+	local function apply()
+		knob:ClearAllPoints()
+		if toggle.checked then
+			toggle:SetBackdropColor(Theme.HexA(Theme.Colors.teal, 0.22))
+			toggle:SetBackdropBorderColor(Theme.HexA(Theme.Colors.teal, 0.5))
+			knob:SetColorTexture(Theme.Hex(Theme.Colors.teal))
+			knob:SetPoint("RIGHT", -3, 0)
+		else
+			toggle:SetBackdropColor(Theme.Hex(Theme.Colors.fieldFill))
+			toggle:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+			knob:SetColorTexture(Theme.Hex(Theme.Colors.textFaint))
+			knob:SetPoint("LEFT", 3, 0)
+		end
+	end
+
+	-- Sets checked state without firing onClick -- for refresh passes that
+	-- sync the toggle to underlying data rather than user interaction.
+	function toggle:SetChecked(checked)
+		self.checked = checked and true or false
+		apply()
+	end
+	function toggle:GetChecked()
+		return self.checked
+	end
+
+	toggle:SetScript("OnClick", function(self)
+		self.checked = not self.checked
+		apply()
+		if opts.onClick then opts.onClick(self, self.checked) end
+	end)
+	apply()
+	return toggle
+end
+
+-- Small solid-color square swatch (rounded dots aren't available without a
+-- circular texture asset -- see file header, no image assets ship with this
+-- addon) used as the "colored dot" the README pairs with blessing/class/
+-- status labels throughout (legends, chips, alert rows).
+function Theme.CreateDot(parent, hex, size)
+	local dot = parent:CreateTexture(nil, "OVERLAY")
+	dot:SetSize(size or 6, size or 6)
+	dot:SetColorTexture(Theme.Hex(hex))
+	return dot
 end
