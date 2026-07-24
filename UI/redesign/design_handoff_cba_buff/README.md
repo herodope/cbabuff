@@ -18,7 +18,7 @@ The redesign is a **full modern dark reskin** (inspired by EllesmereUI — dark,
 | Shared design system | **Done** — `UI/Theme.lua` |
 | 2. Roster window | **Done** — `UI/RosterPage.lua` |
 | 3. Config window | **Done** — `UI/Config.lua` |
-| 4. Alert window | Not started — still the pre-redesign visuals |
+| 4. Alert window | **Done** — `UI/Alert.lua` |
 
 **What shipped (pbar):** `UI/Bar.lua` was reworked to match this doc's Combat
 Strip states (§1, HTML `#2a`–`#2d`) — one chevron now cycles three real
@@ -103,10 +103,39 @@ approach as `UI/RosterPage.lua`'s separators rather than a full backdrop
 border, to avoid stray edges the reference doesn't have. None of this has
 been verified against a running client — see the Verification note below.
 
-**Next up:** Alert window is the last surface — repeat the same approach
-(reskin via `UI/Theme.lua`, preserve all underlying Lua logic untouched,
-verify secure-attribute/combat-lockdown call sites weren't touched where
-applicable).
+**What shipped (Alert):** `UI/Alert.lua` was reworked onto `UI/Theme.lua` to
+match this doc's §4 Alert window — window chrome (fill/hairline/glow,
+colored red while active or teal while clean), a header (state badge +
+"BUFF ALERTS" + a count badge shown only while active + Lock/Unlock + close),
+severity-tinted two-line rows (raider name class-colored, a Missing/Expiring
+tag, a tinted blessing chip via the existing `Theme.BlessingTint`, the
+assigned paladin, and a countdown for expiring rows), and a footer with
+Post raid warning + Snooze 30s. Every detection/warning function
+(`computeRows`, `describeRow`, the three warning layers, the
+`setAttributeSafe`/`pendingWrites` combat-lockdown queue) is unchanged from
+the pre-redesign version; only frame creation/styling and the row's shape
+are new. Rows anchor on both horizontal edges instead of recomputing pixel
+widths on resize, so the resize grip's reflow is free.
+
+**Known gaps / simplifications (Alert):** the HTML's Unicode glyphs (⚙, ✕,
+✓, ⌖) don't render in WoW's stock/Rajdhani fonts (same reason
+`UI/Bar.lua`'s own chevron is the ASCII "v", not "⌄"), so the header's
+lock control is a plain "Lock"/"Unlock" text button (this also satisfies
+spec 11.3's own Lock/Unlock requirement, which the HTML doesn't depict), the
+row's target control reads "TGT", and the checkmarks use the native
+`Interface\Buttons\UI-CheckBox-Check` texture tinted via `SetVertexColor`
+instead of a glyph. "Snooze 30s" (HTML footer) has no equivalent in
+SPEC.md 11.3/11.4 — implemented as a minimal 30s display suppression (same
+mechanism as combat-hide), touching no detection/warning logic.
+`ui.alert.width`'s stored default moved from 280 to 412 (`Data/
+Defaults.lua`) to fit this layout's wider two-line rows; existing
+characters who'd already resized their own window keep their own value.
+None of this has been verified against a running client — see the
+Verification note above.
+
+**Next up:** all four surfaces are done. Remaining work is verification
+against a live client (fonts not yet dropped in, actual glyph/anchor
+rendering, combat-lockdown behavior) rather than further redesign.
 
 ## About the Design Files
 `CBA Buff Redesign.dc.html` in this bundle is a **design reference created in HTML** — a prototype showing the intended look, layout, color system, and interaction states. It is **not production code to copy**.

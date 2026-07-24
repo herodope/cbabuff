@@ -1,13 +1,53 @@
 local ADDON, CBAB = ...
+local Theme = CBAB.Theme
 
 -- The alert window (spec 11.3) and the three warning layers (spec 11.4).
 -- Everything here is driven by CBAB events -- BUFF_STATE_CHANGED,
 -- ASSIGNMENT_CHANGED, ROSTER_CHANGED, UNIT_PET -- never polled.
+--
+-- Reskinned per the design handoff (UI/redesign/design_handoff_cba_buff/
+-- README.md, "4. Alert window", HTML sections 5a/5b, screenshots/5-alert.png)
+-- on top of UI/Theme.lua, same as UI/Bar.lua, UI/RosterPage.lua and
+-- UI/Config.lua already build on. All detection/warning/secure-attribute
+-- logic below (computeRows, describeRow, the three warning layers, the
+-- setAttributeSafe/pendingWrites combat-lockdown queue) is byte-for-byte
+-- unchanged from the pre-redesign version; only frame creation/styling and
+-- the row's visual shape are new.
+--
+-- Four decisions the HTML reference doesn't translate literally into the
+-- WoW UI API:
+--   - The header's gear glyph becomes a plain "Lock"/"Unlock" text button
+--     (spec 11.3 requires exactly this control, synced with Config's own
+--     checkbox via ui.alert.locked) rather than a "⚙" icon -- same reason
+--     UI/Bar.lua's own chevron renders as the ASCII "v" rather than "⌄":
+--     Rajdhani/stock WoW fonts don't ship these Unicode glyphs, so a literal
+--     gear/check/target glyph would render as a blank tofu box in-game. The
+--     header's "!"/close "✕" become the native UIPanelCloseButton texture
+--     and a plain "!" (ASCII, renders fine); the row's "⌖" target control
+--     becomes a small "TGT" text button; the header/clean-state checkmark
+--     uses the native Interface\Buttons\UI-CheckBox-Check texture (tinted
+--     via SetVertexColor) instead of a "✓" glyph.
+--   - Rows resize by two-point (LEFT+RIGHT) anchoring their text/chip
+--     children directly to the row's own edges rather than recomputing
+--     pixel widths on every resize-grip drag (the pre-redesign file's own
+--     approach, kept here only for the resize grip's width math itself) --
+--     WoW stretches a FontString/Frame anchored on both horizontal edges
+--     automatically, so the whole row reflows for free.
+--   - "Snooze 30s" (HTML footer) has no equivalent in the pre-redesign
+--     logic or SPEC.md 11.3/11.4 -- it's new, deliberately minimal: it just
+--     force-hides the window for 30s the same way combat-suppression
+--     already does (see updateVisibility), rather than touching any
+--     detection/warning logic.
+--   - `ui.alert.width`'s stored default moves from 280 to 412 (Data/
+--     Defaults.lua) to match this layout's wider two-line rows; existing
+--     characters who already resized their own window keep their own value,
+--     since defaults only ever seed a first run.
 
 -- ============================================================
 -- Secure attribute writes: same combat-safe pattern as UI/Bar.lua. Rows
--- are click-to-cast and therefore secure buttons; nothing here ever calls
--- SetAttribute while InCombatLockdown().
+-- (and the per-row target button) are click-to-cast/click-to-target and
+-- therefore secure buttons; nothing here ever calls SetAttribute while
+-- InCombatLockdown().
 -- ============================================================
 
 local pendingWrites = {}
@@ -320,52 +360,140 @@ local function describeRow(row)
 end
 
 -- ============================================================
--- Window + row pool
+-- Small visual helpers local to this file.
+-- ============================================================
+
+-- 6-hex (no '#', no alpha) class color -- same helper as UI/RosterPage.lua's
+-- own classHex, duplicated locally rather than exported from Theme since
+-- it's a plain RAID_CLASS_COLORS lookup, not a design token.
+local function classHex(class)
+	local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+	if c and c.colorStr then return c.colorStr:sub(3) end
+	return (Theme.Colors.textSecondary):gsub("#", "")
+end
+
+-- Theme.MixHex returns 3 bare values -- calling it directly as a non-last
+-- argument (e.g. `SetBackdropColor(Theme.MixHex(...), 1)`) would silently
+-- truncate to just the red channel (see Theme.HexA's own doc comment for
+-- why). This wrapper is the same fix, for the color-mix-into-dark recipe
+-- this file needs for severity-tinted row fills.
+local function MixHexA(hexA, pct, hexB, alpha)
+	local r, g, b = Theme.MixHex(hexA, pct, hexB)
+	return r, g, b, alpha or 1
+end
+
+local function severityColor(status)
+	return (status == "missing") and Theme.Colors.red or Theme.Colors.gold
+end
+
+local function severityLabel(status)
+	return (status == "missing") and "Missing" or "Expiring"
+end
+
+-- ============================================================
+-- Layout constants (design handoff README.md, "4. Alert window").
+-- ============================================================
+
+local WINDOW_WIDTH_DEFAULT = 412
+local MIN_WINDOW_WIDTH = 300
+local HEADER_HEIGHT = 50
+local ROW_PAD = 10
+local ROW_HEIGHT = 56
+local ROW_GAP = 7
+local FOOTER_HEIGHT = 50
+local CLEAN_HEIGHT = 150
+local SNOOZE_DURATION = 30
+local CLEAN_HIDE_DELAY = 3
+
+-- Literal hex, not Theme.Colors keys -- the handoff's alert-specific border/
+-- badge shades that don't reuse an existing named token (same posture as
+-- UI/Config.lua's literal per-category dot colors).
+local BORDER_ACTIVE = "#3a2b2b"
+local BORDER_CLEAN = "#24382f"
+local BADGE_ICON_RED = "#f0857a"
+local BADGE_ICON_TEAL = "#5fe0b8"
+
+-- ============================================================
+-- Window chrome: fill/hairline/glow/shadow recipe shared with the other
+-- three surfaces (UI/RosterPage.lua, UI/Config.lua), sized/colored per the
+-- handoff's ~412px popup. Height is entirely content-driven (see render()
+-- below); only width persists/resizes.
 -- ============================================================
 
 local window = CreateFrame("Frame", "CBABuffAlert", UIParent)
-window:SetSize(280, 20)
+window:SetSize(WINDOW_WIDTH_DEFAULT, HEADER_HEIGHT + CLEAN_HEIGHT)
 window:SetMovable(true)
-window:SetResizable(false) -- resizing goes through the custom grip below, not native frame resize
+window:SetResizable(false) -- width-only resize goes through the custom grip below
 window:SetClampedToScreen(true)
-CBAB:ApplyBackdrop(window, {
-	bgFile = "Interface\\Buttons\\WHITE8x8",
-	edgeFile = "Interface\\Buttons\\WHITE8x8",
-	edgeSize = 1,
-})
-window:SetBackdropColor(0, 0, 0, 0.6)
-window:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
-window:Hide() -- no background when empty (spec 11.3): nothing renders until there's a row
+CBAB:ApplyBackdrop(window, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+Theme.ApplyFill(window, Theme.Colors.barFillTop, Theme.Colors.barFillBottom, 1)
+window:SetBackdropBorderColor(Theme.HexA(BORDER_CLEAN, 1))
+Theme.ApplyDropShadow(window, { pad = 14, yOffset = 8, alpha = 0.5 })
+Theme.ApplyTopHairline(window, Theme.Colors.teal)
+Theme.ApplyGlow(window, Theme.Colors.teal, { alpha = 0.08, pad = 14 })
+window:Hide() -- no background when empty (spec 11.3): nothing renders until there's a row or a preview
+
+local forceShown = false
+local lastRows = {}
+local snoozedUntil
+local cleanSince
 
 -- ============================================================
--- Chrome: title, lock/unlock (synced with Config's checkbox through the
--- shared ui.alert.locked field, same pattern as UI/Bar.lua), close, and a
--- resize grip. Locking disables both dragging and resizing at once, same
--- wording and behaviour as the bar's lock.
+-- Header: state badge, title, count badge (active only), Lock/Unlock,
+-- close, and a bottom divider.
 -- ============================================================
 
-local TITLE_HEIGHT = 18
-local WINDOW_PADDING = 20 -- window width minus row width
-local TEXT_MARGIN = 12 -- row width minus text width
-local MIN_WINDOW_WIDTH = 160
+local header = CreateFrame("Frame", nil, window)
+header:SetPoint("TOPLEFT", 0, -3) -- clears the 3px top hairline
+header:SetPoint("TOPRIGHT", 0, -3)
+header:SetHeight(HEADER_HEIGHT)
+header:EnableMouse(true)
+header:RegisterForDrag("LeftButton")
 
-local titleBar = CreateFrame("Frame", nil, window)
-titleBar:SetPoint("TOPLEFT", 0, 0)
-titleBar:SetPoint("TOPRIGHT", 0, 0)
-titleBar:SetHeight(TITLE_HEIGHT)
-titleBar:EnableMouse(true)
+local headerDivider = header:CreateTexture(nil, "ARTWORK")
+headerDivider:SetHeight(1)
+headerDivider:SetPoint("BOTTOMLEFT", 0, 0)
+headerDivider:SetPoint("BOTTOMRIGHT", 0, 0)
+headerDivider:SetColorTexture(Theme.Hex(Theme.Colors.divider))
 
-local titleText = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-titleText:SetPoint("LEFT", 6, 0)
-titleText:SetText("Alerts")
+local badge = CreateFrame("Frame", nil, header)
+badge:SetSize(24, 24)
+badge:SetPoint("LEFT", 15, 0)
+CBAB:ApplyBackdrop(badge, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
 
-local closeButton = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
-closeButton:SetSize(16, 16)
-closeButton:SetPoint("RIGHT", 0, 0)
+local badgeText = badge:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(badgeText, "SectionHeader")
+badgeText:SetPoint("CENTER")
+badgeText:SetText("!")
 
-local lockButton = CreateFrame("Button", nil, titleBar, "UIPanelButtonTemplate")
-lockButton:SetSize(44, 16)
-lockButton:SetPoint("RIGHT", closeButton, "LEFT", -4, 0)
+local badgeCheck = badge:CreateTexture(nil, "OVERLAY")
+badgeCheck:SetSize(12, 12)
+badgeCheck:SetPoint("CENTER")
+badgeCheck:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+badgeCheck:Hide()
+
+local titleText = header:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(titleText, "SectionHeader", { color = "goldText", spacing = 1.5 })
+titleText:SetPoint("LEFT", badge, "RIGHT", 11, 0)
+titleText:SetText(("Buff Alerts"):upper())
+
+local countBadge = CreateFrame("Frame", nil, header)
+countBadge:SetSize(24, 15)
+countBadge:SetPoint("LEFT", titleText, "RIGHT", 8, 0)
+CBAB:ApplyBackdrop(countBadge, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+countBadge:SetBackdropColor(Theme.HexA(Theme.Colors.red, 0.14))
+countBadge:SetBackdropBorderColor(Theme.HexA(Theme.Colors.red, 0.4))
+
+local countBadgeText = countBadge:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(countBadgeText, "ColumnLabel", { color = "redText" })
+countBadgeText:SetPoint("CENTER")
+
+local closeButton = CreateFrame("Button", nil, header, "UIPanelCloseButton")
+closeButton:SetSize(20, 20)
+closeButton:SetPoint("RIGHT", -6, 0)
+
+local lockButton = Theme.CreateButton(header, { text = "Lock", width = 54, height = 22 })
+lockButton:SetPoint("RIGHT", closeButton, "LEFT", -6, 0)
 
 local resizeGrip = CreateFrame("Button", nil, window)
 resizeGrip:SetSize(12, 12)
@@ -376,7 +504,16 @@ resizeGrip.tex:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 
 local function refreshChrome()
 	local locked = CBAB.DB:Char().ui.alert.locked
-	lockButton:SetText(locked and "Unlock" or "Lock")
+	lockButton.label:SetText(locked and "Unlock" or "Lock")
+	if locked then
+		lockButton:SetBackdropColor(Theme.HexA(Theme.Colors.gold, 0.12))
+		lockButton:SetBackdropBorderColor(Theme.HexA(Theme.Colors.gold, 0.4))
+		lockButton.label:SetTextColor(Theme.C("goldText"))
+	else
+		lockButton:SetBackdropColor(Theme.Hex(Theme.Colors.controlFill))
+		lockButton:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+		lockButton.label:SetTextColor(Theme.C("textSecondary"))
+	end
 	resizeGrip:SetShown(not locked)
 end
 CBAB.Alert_RefreshChrome = refreshChrome
@@ -385,6 +522,11 @@ lockButton:SetScript("OnClick", function()
 	local charDB = CBAB.DB:Char()
 	charDB.ui.alert.locked = not charDB.ui.alert.locked
 	refreshChrome()
+end)
+
+closeButton:SetScript("OnClick", function()
+	forceShown = false
+	window:Hide()
 end)
 
 local function startDrag()
@@ -399,9 +541,8 @@ local function stopDrag()
 	charDB.ui.alert.x = x
 	charDB.ui.alert.y = y
 end
-titleBar:RegisterForDrag("LeftButton")
-titleBar:SetScript("OnDragStart", startDrag)
-titleBar:SetScript("OnDragStop", stopDrag)
+header:SetScript("OnDragStart", startDrag)
+header:SetScript("OnDragStop", stopDrag)
 
 resizeGrip:SetScript("OnMouseDown", function(self)
 	if CBAB.DB:Char().ui.alert.locked then return end
@@ -418,21 +559,14 @@ resizeGrip:SetScript("OnUpdate", function(self)
 	local x = select(1, GetCursorPosition())
 	local dx = (x - self.startX) / window:GetEffectiveScale()
 	window:SetWidth(math.max(MIN_WINDOW_WIDTH, self.startWidth + dx))
-	CBAB.Alert_LayoutRows()
 end)
 
 -- ============================================================
--- Force-show (spec ask): Config's "Show alert now" button bypasses both
+-- Force-show (spec 11.5's "Show alert (preview)" button): bypasses both
 -- autoHide and the empty-window suppression so the window can be seen and
--- positioned/resized even with nothing currently wrong.
+-- positioned/resized even with nothing currently wrong. Still respects
+-- hideInCombat/snooze, same as a real alert would.
 -- ============================================================
-
-local forceShown = false
-
-local previewText = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-previewText:SetPoint("TOPLEFT", 6, -(TITLE_HEIGHT + 2))
-previewText:SetText("No active alerts (preview)")
-previewText:Hide()
 
 function CBAB.Alert_SetForceShown(shown)
 	forceShown = shown and true or false
@@ -443,110 +577,268 @@ function CBAB.Alert_IsForceShown()
 	return forceShown
 end
 
-closeButton:SetScript("OnClick", function()
-	forceShown = false
-	window:Hide()
-end)
-
 -- ============================================================
--- Window + row pool
+-- Clean-state content: centered check tile + title + subtitle. Same frame
+-- footprint whether it's genuinely clean or just an empty force-shown
+-- preview -- only the subtitle text differs (see render() below).
 -- ============================================================
 
-local ROW_HEIGHT = 18
+local cleanContent = CreateFrame("Frame", nil, window)
+cleanContent:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
+cleanContent:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, 0)
+cleanContent:SetHeight(CLEAN_HEIGHT)
+
+local cleanTile = CreateFrame("Frame", nil, cleanContent)
+cleanTile:SetSize(52, 52)
+cleanTile:SetPoint("TOP", 0, -24)
+CBAB:ApplyBackdrop(cleanTile, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+cleanTile:SetBackdropColor(Theme.HexA(Theme.Colors.teal, 0.12))
+cleanTile:SetBackdropBorderColor(Theme.HexA(Theme.Colors.teal, 0.4))
+
+local cleanCheck = cleanTile:CreateTexture(nil, "OVERLAY")
+cleanCheck:SetSize(26, 26)
+cleanCheck:SetPoint("CENTER")
+cleanCheck:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+cleanCheck:SetVertexColor(Theme.Hex(Theme.Colors.teal))
+
+local cleanTitle = cleanContent:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(cleanTitle, "SectionHeader", { color = "textPrimary" })
+cleanTitle:SetPoint("TOP", cleanTile, "BOTTOM", 0, -12)
+cleanTitle:SetText("All blessings up")
+
+local cleanSubtitle = cleanContent:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(cleanSubtitle, "Body", { color = "textMuted" })
+cleanSubtitle:SetPoint("TOP", cleanTitle, "BOTTOM", 0, -6)
+cleanSubtitle:SetPoint("LEFT", cleanContent, "LEFT", 20, 0)
+cleanSubtitle:SetPoint("RIGHT", cleanContent, "RIGHT", -20, 0)
+cleanSubtitle:SetJustifyH("CENTER")
+cleanSubtitle:SetWordWrap(true)
+
+-- ============================================================
+-- Row container + row pool. Rows anchor on BOTH horizontal edges (not a
+-- fixed SetWidth), so dragging the resize grip reflows every row for free --
+-- see file header.
+-- ============================================================
+
+local rowContainer = CreateFrame("Frame", nil, window)
+rowContainer:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
+rowContainer:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, 0)
+
+local function createRow(index)
+	local row = CreateFrame("Button", "CBABuffAlertRow" .. index, rowContainer, "SecureActionButtonTemplate")
+	row:RegisterForClicks("AnyDown")
+	row:SetHeight(ROW_HEIGHT)
+	CBAB:ApplyBackdrop(row, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	Theme.ApplyHoverHighlight(row, { hoverAlpha = 0.05, pressAlpha = 0.02 })
+
+	-- 3px severity-colored left accent (README: "border-left:3px solid
+	-- {severity}").
+	row.accent = row:CreateTexture(nil, "ARTWORK")
+	row.accent:SetWidth(3)
+	row.accent:SetPoint("TOPLEFT", 1, -1)
+	row.accent:SetPoint("BOTTOMLEFT", 1, 1)
+
+	-- Everything but the accent/backdrop dims together for a non-mine row
+	-- ("otherwise dim and informational", spec 11.3) -- the target button
+	-- stays outside this group since targeting works regardless of who's
+	-- assigned.
+	row.inner = CreateFrame("Frame", nil, row)
+	row.inner:SetAllPoints()
+
+	row.nameText = row.inner:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.nameText, "Name")
+	row.nameText:SetPoint("TOPLEFT", 14, -10)
+	row.nameText:SetJustifyH("LEFT")
+
+	row.sevTag = CreateFrame("Frame", nil, row.inner)
+	row.sevTag:SetSize(66, 15)
+	row.sevTag:SetPoint("LEFT", row.nameText, "RIGHT", 8, 0)
+	CBAB:ApplyBackdrop(row.sevTag, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	row.sevTag.text = row.sevTag:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.sevTag.text, "ColumnLabel", { spacing = 0.5 })
+	row.sevTag.text:SetPoint("CENTER")
+
+	row.chip = CreateFrame("Frame", nil, row.inner)
+	row.chip:SetSize(150, 20)
+	row.chip:SetPoint("TOPLEFT", row.nameText, "BOTTOMLEFT", 0, -8)
+	CBAB:ApplyBackdrop(row.chip, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	row.chip.dot = row.chip:CreateTexture(nil, "OVERLAY")
+	row.chip.dot:SetSize(7, 7)
+	row.chip.dot:SetPoint("LEFT", 7, 0)
+	row.chip.text = row.chip:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.chip.text, "Body")
+	row.chip.text:SetPoint("LEFT", row.chip.dot, "RIGHT", 6, 0)
+	row.chip.text:SetJustifyH("LEFT")
+
+	row.byText = row.inner:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.byText, "Body", { color = "textMuted" })
+	row.byText:SetPoint("LEFT", row.chip, "RIGHT", 7, 0)
+	row.byText:SetJustifyH("LEFT")
+
+	row.countdownText = row.inner:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(row.countdownText, "NumericValue")
+	row.countdownText:SetPoint("RIGHT", row, "RIGHT", -46, 0)
+	row.countdownText:Hide()
+
+	-- Target button (README: "⌖ targets the raider") -- its own secure
+	-- button, sitting on top of the row's own cast-click area so a click on
+	-- it never also fires the row's cast.
+	row.targetBtn = CreateFrame("Button", nil, row, "SecureActionButtonTemplate")
+	row.targetBtn:RegisterForClicks("AnyDown")
+	row.targetBtn:SetSize(30, 30)
+	row.targetBtn:SetPoint("RIGHT", -8, 0)
+	CBAB:ApplyBackdrop(row.targetBtn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	row.targetBtn:SetBackdropColor(Theme.Hex(Theme.Colors.controlFill))
+	row.targetBtn:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+	local targetLabel = row.targetBtn:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(targetLabel, "ColumnLabel", { color = "textSecondary" })
+	targetLabel:SetPoint("CENTER")
+	targetLabel:SetText("TGT")
+	Theme.ApplyHoverHighlight(row.targetBtn)
+
+	return row
+end
+
 local rowPool = {}
-
-local function getRowFrame(index)
+local function getRow(index)
 	local row = rowPool[index]
 	if not row then
-		row = CreateFrame("Button", "CBABuffAlertRow" .. index, window, "SecureActionButtonTemplate")
-		row:RegisterForClicks("AnyDown")
-		row:SetSize(260, ROW_HEIGHT)
-		row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		row.text:SetPoint("LEFT", 6, 0)
-		row.text:SetJustifyH("LEFT")
-		row.text:SetWidth(248)
+		row = createRow(index)
 		rowPool[index] = row
 	end
 	return row
 end
 
--- Reflows every pooled row (including hidden ones, so they're already
--- correct if reused) to the window's current width -- called after a
--- refresh and live while dragging the resize grip.
-function CBAB.Alert_LayoutRows()
-	local rowWidth = math.max(20, window:GetWidth() - WINDOW_PADDING)
-	for _, row in pairs(rowPool) do
-		row:SetWidth(rowWidth)
-		row.text:SetWidth(math.max(10, rowWidth - TEXT_MARGIN))
-	end
-end
+-- Applies one computeRows() entry into a pooled row frame, including the
+-- secure cast/target attributes.
+local function applyRowData(row, data, myName)
+	local isGreater = data.kind == "greater"
+	local sevHex = severityColor(data.status)
 
-local function populateWindow(rows)
-	local myName = UnitName("player")
+	row:SetBackdropColor(MixHexA(sevHex, 8, Theme.Colors.fieldFill, 1))
+	row:SetBackdropBorderColor(MixHexA(sevHex, 30, Theme.Colors.fieldFill, 1))
+	row.accent:SetColorTexture(Theme.Hex(sevHex))
 
-	for i, data in ipairs(rows) do
-		local row = getRowFrame(i)
-		row:ClearAllPoints()
-		row:SetPoint("TOPLEFT", window, "TOPLEFT", 0, -(TITLE_HEIGHT + (i - 1) * ROW_HEIGHT))
-		row:Show()
-		row.text:SetText(describeRow(data))
+	local unit = data.units[1]
+	local m = CBAB.Roster:Get()[unit]
 
-		local mine = data.assignedTo == myName
-		if mine then
-			row.text:SetTextColor(1, 1, 1)
-			-- Greater rows cast on any affected unit (class-wide); override
-			-- rows are always a normal cast on that one specific unit.
-			setAttributeSafe(row, "type1", "spell")
-			setAttributeSafe(row, "spell1", spellNameFor(data.blessing, data.kind == "greater"))
-			setAttributeSafe(row, "unit1", data.units[1])
-		else
-			row.text:SetTextColor(0.55, 0.55, 0.55)
-			setAttributeSafe(row, "type1", nil)
-			setAttributeSafe(row, "spell1", nil)
-		end
+	local who, whoClass
+	if isGreater then
+		who = classLabel(data.class)
+		whoClass = data.class
+	elseif m and m.isPet then
+		who = ("%s's pet"):format(m.owner or "?")
+		whoClass = nil
+	elseif data.reason == "tank" then
+		who = (m and m.name or unit) .. " |cff" .. (Theme.Colors.textMuted):gsub("#", "") .. "(tank)|r"
+		whoClass = m and m.class
+	else
+		who = m and m.name or unit
+		whoClass = m and m.class
 	end
 
-	for i = #rows + 1, #rowPool do
-		rowPool[i]:Hide()
+	row.nameText:SetText(who)
+	row.nameText:SetTextColor(Theme.HexA(whoClass and classHex(whoClass) or Theme.Colors.textSecondary, 1))
+
+	row.sevTag:SetBackdropColor(Theme.HexA(sevHex, 0.15))
+	row.sevTag:SetBackdropBorderColor(Theme.HexA(sevHex, 0.35))
+	row.sevTag.text:SetText(severityLabel(data.status))
+	row.sevTag.text:SetTextColor(Theme.HexA(sevHex, 1))
+
+	local tint = Theme.BlessingTint(data.blessing)
+	row.chip:SetBackdropColor(tint.fill[1], tint.fill[2], tint.fill[3], 1)
+	row.chip:SetBackdropBorderColor(tint.border[1], tint.border[2], tint.border[3], 1)
+	row.chip.dot:SetColorTexture(tint.solid[1], tint.solid[2], tint.solid[3])
+	row.chip.text:SetText((isGreater and "Greater " or "") .. CBAB.Blessings[data.blessing].name)
+	row.chip.text:SetTextColor(tint.label[1], tint.label[2], tint.label[3], 1)
+
+	row.byText:SetText("by " .. (data.assignedTo or "?"))
+
+	if data.status == "expiring" and data.soonestRemaining then
+		row.countdownText:SetText(formatRemaining(data.soonestRemaining))
+		row.countdownText:SetTextColor(Theme.HexA(sevHex, 1))
+		row.countdownText:Show()
+	else
+		row.countdownText:Hide()
 	end
 
-	CBAB.Alert_LayoutRows()
-	previewText:SetShown(#rows == 0 and forceShown)
-	window:SetHeight(TITLE_HEIGHT + math.max(#rows, 1) * ROW_HEIGHT)
+	local mine = data.assignedTo == myName
+	row.inner:SetAlpha(mine and 1 or 0.62)
+
+	if mine then
+		setAttributeSafe(row, "type1", "spell")
+		setAttributeSafe(row, "spell1", spellNameFor(data.blessing, isGreater))
+		setAttributeSafe(row, "unit1", unit)
+	else
+		setAttributeSafe(row, "type1", nil)
+		setAttributeSafe(row, "spell1", nil)
+	end
+
+	setAttributeSafe(row.targetBtn, "type1", "target")
+	setAttributeSafe(row.targetBtn, "unit1", unit)
 end
 
 -- ============================================================
--- Show/hide timing (spec 11.3): reappears instantly on a problem, but
--- only hides after a short clean interval, so a one-flush blip doesn't
--- flicker the window. A pending hide is cancelled just by clearing
--- cleanSince -- no timer cancellation needed, the deferred check just
--- no-ops if it's no longer clean when it fires.
+-- Footer: Post raid warning (officer-only, gold-outline per the handoff) +
+-- Snooze 30s. Active-mode only -- hidden entirely in the clean state.
 -- ============================================================
 
-local CLEAN_HIDE_DELAY = 3
-local cleanSince
+local footer = CreateFrame("Frame", nil, window)
+footer:SetPoint("BOTTOMLEFT", 0, 0)
+footer:SetPoint("BOTTOMRIGHT", 0, 0)
+footer:SetHeight(FOOTER_HEIGHT)
 
-local function updateVisibility(hasRows)
-	if hasRows or forceShown then
-		cleanSince = nil
-		local ui = CBAB.DB:Char().ui.alert
-		if ui.hideInCombat and InCombatLockdown() then
-			window:Hide()
-		else
-			window:Show()
+local footerFill = footer:CreateTexture(nil, "BACKGROUND")
+footerFill:SetAllPoints()
+footerFill:SetColorTexture(Theme.HexA("000000", 0.2))
+
+local footerDivider = footer:CreateTexture(nil, "ARTWORK")
+footerDivider:SetHeight(1)
+footerDivider:SetPoint("TOPLEFT", 0, 0)
+footerDivider:SetPoint("TOPRIGHT", 0, 0)
+footerDivider:SetColorTexture(Theme.Hex(Theme.Colors.divider))
+
+local raidWarnButton = Theme.CreateButton(footer, {
+	text = "Post raid warning", width = 148, height = 24, variant = "outline-gold",
+	onClick = function()
+		if not CBAB:Mode().coordinator then
+			CBAB:Print("only the leader or an assist can post a raid warning")
+			return
 		end
-		return
-	end
+		if #lastRows == 0 then
+			CBAB:Print("nothing to warn about")
+			return
+		end
+		local lines = {}
+		for _, row in ipairs(lastRows) do
+			lines[#lines + 1] = describeRow(row)
+		end
+		SendChatMessage("CBA Buff: " .. table.concat(lines, " | "), "RAID_WARNING")
+	end,
+})
+raidWarnButton:SetPoint("LEFT", 15, 0)
 
-	if not cleanSince then
-		cleanSince = GetTime()
-		CBAB:After(CLEAN_HIDE_DELAY, function()
-			if cleanSince and (GetTime() - cleanSince) >= CLEAN_HIDE_DELAY - 0.05 then
-				window:Hide()
+local officerOnlyText = footer:CreateFontString(nil, "OVERLAY")
+Theme.StyleText(officerOnlyText, "Body", { color = "textFaint" })
+officerOnlyText:SetPoint("LEFT", raidWarnButton, "RIGHT", 8, 0)
+officerOnlyText:SetText("officer only")
+
+-- Purely a display-suppression convenience (see file header) -- never
+-- touches computeRows/warnings, same as combat suppression already doesn't.
+local snoozeButton = Theme.CreateButton(footer, {
+	text = ("Snooze %ds"):format(SNOOZE_DURATION), width = 92, height = 24,
+	onClick = function()
+		snoozedUntil = GetTime() + SNOOZE_DURATION
+		window:Hide()
+		CBAB:After(SNOOZE_DURATION, function()
+			if snoozedUntil and GetTime() >= snoozedUntil then
+				snoozedUntil = nil
+				CBAB.Alert_Refresh()
 			end
 		end)
-	end
-end
+	end,
+})
+snoozeButton:SetPoint("RIGHT", -15, 0)
 
 -- ============================================================
 -- Warning layer 1 (spec 11.4): local screen text + sound, for the
@@ -621,35 +913,111 @@ local function checkWhisperWarnings(rows)
 	end
 end
 
+-- Warning layer 3 (spec 11.4, raid warning post) lives on raidWarnButton
+-- above -- officer-only, manual, the only SendChatMessage(..., "RAID_WARNING")
+-- call anywhere in this file. Automatic raid-channel spam is explicitly
+-- prohibited by spec and not implemented anywhere.
+
 -- ============================================================
--- Warning layer 3 (spec 11.4): raid warning post. Officer-only, and the
--- ONLY way this ever fires is this one manual button -- nothing else in
--- this file calls SendChatMessage on RAID_WARNING. Automatic raid-channel
--- spam is explicitly prohibited by spec and not implemented anywhere.
+-- Render: lays out the header/body/footer for the current row set and
+-- resizes the window to fit. Height is always fully recomputed (no stored
+-- height) -- only width persists, via the resize grip above.
 -- ============================================================
 
-local lastRows = {}
+local function render(rows)
+	local hasRows = #rows > 0
 
-local raidWarnButton = CreateFrame("Button", "CBABuffAlertRaidWarnButton", window, "UIPanelButtonTemplate")
-raidWarnButton:SetSize(56, 18)
-raidWarnButton:SetPoint("BOTTOMRIGHT", window, "TOPRIGHT", 0, 2)
-raidWarnButton:SetText("Post")
-raidWarnButton:Hide()
-raidWarnButton:SetScript("OnClick", function()
-	if not CBAB:Mode().coordinator then
-		CBAB:Print("only the leader or an assist can post a raid warning")
+	Theme.ApplyTopHairline(window, hasRows and Theme.Colors.red or Theme.Colors.teal)
+	Theme.ApplyGlow(window, hasRows and Theme.Colors.red or Theme.Colors.teal, { alpha = 0.08, pad = 14 })
+	window:SetBackdropBorderColor(Theme.HexA(hasRows and BORDER_ACTIVE or BORDER_CLEAN, 1))
+
+	badge:SetBackdropColor(Theme.HexA(hasRows and Theme.Colors.red or Theme.Colors.teal, 0.16))
+	badge:SetBackdropBorderColor(Theme.HexA(hasRows and Theme.Colors.red or Theme.Colors.teal, 0.45))
+	badgeText:SetShown(hasRows)
+	badgeCheck:SetShown(not hasRows)
+	if hasRows then
+		badgeText:SetTextColor(Theme.HexA(BADGE_ICON_RED, 1))
+	else
+		badgeCheck:SetVertexColor(Theme.Hex(BADGE_ICON_TEAL))
+	end
+	countBadge:SetShown(hasRows)
+	if hasRows then countBadgeText:SetText(tostring(#rows)) end
+
+	raidWarnButton:SetShown(hasRows and CBAB:Mode().coordinator and true or false)
+	footer:SetShown(hasRows)
+	rowContainer:SetShown(hasRows)
+	cleanContent:SetShown(not hasRows)
+
+	if hasRows then
+		local myName = UnitName("player")
+		for i, data in ipairs(rows) do
+			local row = getRow(i)
+			row:ClearAllPoints()
+			row:SetPoint("TOPLEFT", rowContainer, "TOPLEFT", ROW_PAD, -(ROW_PAD + (i - 1) * (ROW_HEIGHT + ROW_GAP)))
+			row:SetPoint("TOPRIGHT", rowContainer, "TOPRIGHT", -ROW_PAD, -(ROW_PAD + (i - 1) * (ROW_HEIGHT + ROW_GAP)))
+			applyRowData(row, data, myName)
+			row:Show()
+		end
+		for i = #rows + 1, #rowPool do
+			rowPool[i]:Hide()
+		end
+
+		local rowsHeight = #rows * ROW_HEIGHT + (#rows - 1) * ROW_GAP + ROW_PAD * 2
+		rowContainer:SetHeight(rowsHeight)
+		window:SetHeight(HEADER_HEIGHT + rowsHeight + FOOTER_HEIGHT)
+	else
+		for i = 1, #rowPool do
+			rowPool[i]:Hide()
+		end
+
+		local ui = CBAB.DB:Char().ui.alert
+		if forceShown then
+			cleanSubtitle:SetText("Previewing -- nothing to report right now")
+		elseif ui.autoHide then
+			cleanSubtitle:SetText(("Nobody's missing anything. Hiding in %ds..."):format(CLEAN_HIDE_DELAY))
+		else
+			cleanSubtitle:SetText("Nobody's missing anything.")
+		end
+
+		window:SetHeight(HEADER_HEIGHT + CLEAN_HEIGHT)
+	end
+end
+
+-- ============================================================
+-- Show/hide timing (spec 11.3): reappears instantly on a problem, but
+-- only hides after a short clean interval, so a one-flush blip doesn't
+-- flicker the window. A pending hide is cancelled just by clearing
+-- cleanSince -- no timer cancellation needed, the deferred check just
+-- no-ops if it's no longer clean when it fires. Snooze suppresses
+-- everything, the same way hideInCombat already does.
+-- ============================================================
+
+local function updateVisibility(hasRows)
+	if snoozedUntil and GetTime() < snoozedUntil then
+		window:Hide()
 		return
 	end
-	if #lastRows == 0 then
-		CBAB:Print("nothing to warn about")
+
+	if hasRows or forceShown then
+		cleanSince = nil
+		local ui = CBAB.DB:Char().ui.alert
+		if ui.hideInCombat and InCombatLockdown() then
+			window:Hide()
+		else
+			window:Show()
+		end
 		return
 	end
-	local lines = {}
-	for _, row in ipairs(lastRows) do
-		lines[#lines + 1] = describeRow(row)
+
+	if not cleanSince then
+		cleanSince = GetTime()
+		CBAB:After(CLEAN_HIDE_DELAY, function()
+			if cleanSince and (GetTime() - cleanSince) >= CLEAN_HIDE_DELAY - 0.05 then
+				window:Hide()
+			end
+		end)
 	end
-	SendChatMessage("CBA Buff: " .. table.concat(lines, " | "), "RAID_WARNING")
-end)
+end
 
 -- ============================================================
 -- Refresh: the single entry point every event below funnels into.
@@ -659,9 +1027,8 @@ local function refresh()
 	local rows = computeRows()
 	lastRows = rows
 
-	populateWindow(rows)
+	render(rows)
 	updateVisibility(#rows > 0)
-	raidWarnButton:SetShown(CBAB:Mode().coordinator and #rows > 0)
 
 	checkOwnWarnings(rows)
 	checkWhisperWarnings(rows)
@@ -694,8 +1061,7 @@ CBAB:On("ADDON_LOADED", "alert:init", function(loadedAddon)
 	window:ClearAllPoints()
 	window:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or 200)
 	window:SetScale(ui.scale or 1.0)
-	window:SetWidth(ui.width or 280)
-	CBAB.Alert_LayoutRows()
+	window:SetWidth(ui.width or WINDOW_WIDTH_DEFAULT)
 	refreshChrome()
 	CBAB:Off("ADDON_LOADED", "alert:init")
 end)

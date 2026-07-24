@@ -44,8 +44,10 @@ CBAB.Defaults.char = {
 			-- Locked by default (spec: same "avoid an accidental drag mid-raid"
 			-- reasoning as the bar), and a persisted width for the resize grip --
 			-- height is always content-driven (title bar + row count), never
-			-- stored.
-			locked = true, width = 280,
+			-- stored. 412 matches the redesign's two-line row layout (UI/
+			-- Alert.lua, design handoff "4. Alert window") -- the pre-redesign
+			-- single-line rows only needed 280.
+			locked = true, width = 412,
 		},
 	},
 	warnings = { enabled = true, threshold = 120, sound = true, screenText = true, whisper = false },
