@@ -449,6 +449,17 @@ function CBAB.Bar_RefreshChrome() end
 
 local refreshGridStructure, refreshAssignment, refreshVisualState
 
+-- Every grid cell (row 1's PallyPowerC1-9 AND every pooled row's cell) is a
+-- SecureActionButtonTemplate button, which Blizzard treats as a protected
+-- frame: SetPoint/SetSize on one from insecure code throws "Cannot anchor
+-- protected frames to regions" while InCombatLockdown() -- the layout
+-- equivalent of the setAttributeSafe/pendingWrites guard above. Skip the
+-- whole structure pass and replay it once combat drops rather than let that
+-- error abort refreshGridStructure() partway through (which left row 1's
+-- class cells with no anchor at all -- ClearAllPoints() had already run --
+-- for the rest of that call).
+local pendingGridRefresh = false
+
 -- ============================================================
 -- Brand cluster: chip + status dot + vertical "CBA" label (README §1,
 -- states 2a/2b/2d). WoW FontStrings can't rotate glyphs the way the
@@ -1223,6 +1234,10 @@ local function hideRow(row)
 end
 
 refreshGridStructure = function()
+	if InCombatLockdown() then
+		pendingGridRefresh = true
+		return
+	end
 	currentLayout = computeClassLayout()
 	local size = currentSize()
 	local rowNames = paladinRowNames()
@@ -1669,6 +1684,10 @@ end)
 -- combat actually starts. Pets/aura/popout attributes have no such guard,
 -- so they stay usable in combat (spec 11.2).
 CBAB:On("PLAYER_REGEN_ENABLED", "bar:combat-unlock", function()
+	if pendingGridRefresh then
+		pendingGridRefresh = false
+		refreshGridStructure()
+	end
 	refreshAssignment()
 end)
 
