@@ -1230,6 +1230,21 @@ end
 -- see paladinRowNames).
 -- ============================================================
 
+-- Cell SetPoint/SetSize occasionally throws "Cannot anchor protected frames
+-- to regions" on the PallyPowerC1-9 compat buttons even outside combat --
+-- confirmed live on this client despite matching PallyPower's own working
+-- (InCombatLockdown()-guarded, otherwise unguarded) repositioning pattern,
+-- so something about this client's secure-frame enforcement is stricter
+-- than that reference implementation ever had to handle. Whatever the exact
+-- trigger, a cell that fails to move/resize should stay wherever it last
+-- successfully was rather than take down the rest of this pass -- every
+-- OTHER row/divider/label still needs to lay out and bar:SetSize() still
+-- needs to run. pcall contains the failure to just that one cell.
+local function safeReposition(cell, width, height, ...)
+	pcall(cell.SetSize, cell, width, height)
+	pcall(cell.SetPoint, cell, ...)
+end
+
 local function hideRow(row)
 	row.paladinName = nil
 	row.manualMode = false
@@ -1443,8 +1458,8 @@ refreshGridStructure = function()
 			cell:ClearAllPoints()
 			if currentLayout[slot] then
 				cell.class = currentLayout[slot]
-				cell:SetSize(tileSize, tileSize)
-				cell:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + columnX[slot], cellY)
+				safeReposition(cell, tileSize, tileSize,
+					"TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + columnX[slot], cellY)
 				cell:Show()
 			else
 				cell.class = nil
@@ -1453,17 +1468,18 @@ refreshGridStructure = function()
 		end
 
 		row.cells.pets:ClearAllPoints()
-		row.cells.pets:SetSize(tileSize, tileSize)
 		if showPets then
-			row.cells.pets:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + petsX, cellY)
+			safeReposition(row.cells.pets, tileSize, tileSize,
+				"TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + petsX, cellY)
 			row.cells.pets:Show()
 		else
+			row.cells.pets:SetSize(tileSize, tileSize)
 			row.cells.pets:Hide()
 		end
 
 		row.cells.aura:ClearAllPoints()
-		row.cells.aura:SetSize(tileSize, tileSize)
-		row.cells.aura:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + auraX, cellY)
+		safeReposition(row.cells.aura, tileSize, tileSize,
+			"TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + auraX, cellY)
 		row.cells.aura:Show()
 
 		-- Non-self rows in the expanded view read as coverage only --
