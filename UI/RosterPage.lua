@@ -551,12 +551,14 @@ local function createTankToggle(parent)
 			btn:SetBackdropColor(Theme.HexA(Theme.Colors.blue, 0.14))
 			btn:SetBackdropBorderColor(Theme.HexA(Theme.Colors.blue, 0.4))
 			Theme.StyleText(label, "ColumnLabel", { color = "blue" })
-			label:SetText("TANK")
+			label:SetText("Tank")
 		else
 			btn:SetBackdropColor(0, 0, 0, 0)
 			btn:SetBackdropBorderColor(0, 0, 0, 0)
 			Theme.StyleText(label, "ColumnLabel", { color = "textFaint" })
-			label:SetText("--")
+			-- Matches blessingLabel/auraLabel/classLabel's existing "no value"
+			-- convention (single hyphen), not the mockup's literal em dash.
+			label:SetText("-")
 		end
 	end
 
@@ -604,19 +606,20 @@ local function createPaladinRow(index)
 	row.specBox:SetAutoFocus(false)
 	row.specBox:SetFontObject(GameFontDisableSmall)
 
-	row.assignDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
-	row.assignDot:SetPoint("LEFT", PAL_ASSIGN_DOT_X, 0)
-
+	-- README §2 "Assignment = blessing chip (tinted, dot + name + v)": a
+	-- Theme-skinned pill, not the bare native dropdown + external dot this
+	-- used to be. See Theme.SkinDropdown for why hiding native chrome (not
+	-- retexturing it) makes the chip look achievable at all.
 	row.assignDropdown = CreateFrame("Frame", "CBABuffRosterPalAssignDD" .. index, row, "UIDropDownMenuTemplate")
-	row.assignDropdown:SetPoint("LEFT", PAL_ASSIGN_X, 0)
+	row.assignDropdown:SetPoint("LEFT", PAL_ASSIGN_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.assignDropdown, PAL_ASSIGN_WIDTH)
+	Theme.SkinDropdown(row.assignDropdown, { width = 100, dot = true })
 
-	row.auraDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
-	row.auraDot:SetPoint("LEFT", PAL_AURA_DOT_X, 0)
-
+	-- Aura chip has no dot in the mockup (plain dark pill, text + v only).
 	row.auraDropdown = CreateFrame("Frame", "CBABuffRosterPalAuraDD" .. index, row, "UIDropDownMenuTemplate")
-	row.auraDropdown:SetPoint("LEFT", PAL_AURA_X, 0)
+	row.auraDropdown:SetPoint("LEFT", PAL_AURA_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.auraDropdown, PAL_AURA_WIDTH)
+	Theme.SkinDropdown(row.auraDropdown, { width = 76 })
 
 	row.warningText = row:CreateFontString(nil, "OVERLAY")
 	Theme.StyleText(row.warningText, "Body", { color = "redText" })
@@ -722,26 +725,25 @@ local function createTankRow(index)
 	row.deleteButton:SetSize(DELETE_SIZE, DELETE_SIZE)
 	row.deleteButton:SetPoint("LEFT", row.nameBox, "RIGHT", 0, 0)
 
-	row.classDot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
-	row.classDot:SetPoint("LEFT", TANK_CLASS_DOT_X, 0)
-
+	-- README §2 Tanks table: Class is plain class-colored text, no chip
+	-- (Theme.SkinDropdown's opts.plain) -- still a real dropdown underneath
+	-- (functionally required here; the mockup's read-only text assumes the
+	-- class comes from the Paladins table, which doesn't apply to a
+	-- separately-curated tank roster). Buff columns ARE chips, one dot each.
 	row.classDropdown = CreateFrame("Frame", "CBABuffRosterTankClassDD" .. index, row, "UIDropDownMenuTemplate")
 	-- Fixed x (shared with the header, above) instead of chaining relative
 	-- offsets, so headers and dropdowns stay aligned regardless of the
 	-- template's internal padding.
-	row.classDropdown:SetPoint("LEFT", TANK_CLASS_DD_X, 0)
+	row.classDropdown:SetPoint("LEFT", TANK_CLASS_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.classDropdown, TANK_CLASS_DD_WIDTH)
+	Theme.SkinDropdown(row.classDropdown, { width = TANK_CLASS_DD_WIDTH + 10, plain = true })
 
-	row.buffDots = {}
 	row.buffDropdowns = {}
 	for slot = 1, 4 do
-		local dot = Theme.CreateDot(row, Theme.Colors.dashedEmpty, 6)
-		dot:SetPoint("LEFT", TANK_BUFF_DOT_X[slot], 0)
-		row.buffDots[slot] = dot
-
 		local dd = CreateFrame("Frame", ("CBABuffRosterTankBuffDD%d_%d"):format(index, slot), row, "UIDropDownMenuTemplate")
-		dd:SetPoint("LEFT", TANK_BUFF_DD_X[slot], 0)
+		dd:SetPoint("LEFT", TANK_BUFF_DOT_X[slot], 0)
 		UIDropDownMenu_SetWidth(dd, TANK_BUFF_DD_WIDTH)
+		Theme.SkinDropdown(dd, { width = TANK_BUFF_DD_WIDTH + 14, dot = true })
 		row.buffDropdowns[slot] = dd
 	end
 
@@ -1426,13 +1428,7 @@ refreshAll = function()
 		local effective = row.state.assignOverride or assumedBlessing
 		UIDropDownMenu_SetText(row.assignDropdown, blessingLabel(effective))
 		UIDropDownMenu_SetText(row.auraDropdown, auraLabel(row.state.auraOverride))
-
-		local assignTint = effective and Theme.BlessingTint(effective)
-		if assignTint then
-			row.assignDot:SetColorTexture(assignTint.solid[1], assignTint.solid[2], assignTint.solid[3])
-		else
-			row.assignDot:SetColorTexture(Theme.Hex(Theme.Colors.dashedEmpty))
-		end
+		row.assignDropdown:SetTint(effective and CBAB.Blessings[effective].color)
 
 		if row.state.assignOverride and row.state.assignOverride ~= assumedBlessing then
 			row.warningText:SetText(("overridden -- assumed %s"):format(blessingLabel(assumedBlessing)))
@@ -1485,8 +1481,11 @@ refreshAll = function()
 			row.deleteButton:Hide()
 		end
 
+		-- classLabel already embeds a |cff.../|r color code (used elsewhere
+		-- for plain FontStrings too), which UIDropDownMenu_SetText's
+		-- underlying SetText renders inline -- no separate dot/tint needed
+		-- for this plain-text (opts.plain) column.
 		UIDropDownMenu_SetText(row.classDropdown, classLabel(row.state.class))
-		row.classDot:SetColorTexture(Theme.Hex(classHex(row.state.class)))
 
 		local defaultWants = (profile.wants.tanks and profile.wants.tanks[row.state.class]) or {}
 		for slot, dd in ipairs(row.buffDropdowns) do
@@ -1495,12 +1494,7 @@ refreshAll = function()
 				value = defaultWants[slot]
 			end
 			UIDropDownMenu_SetText(dd, value and blessingLabel(value) or "-")
-			local buffTint = value and Theme.BlessingTint(value)
-			if buffTint then
-				row.buffDots[slot]:SetColorTexture(buffTint.solid[1], buffTint.solid[2], buffTint.solid[3])
-			else
-				row.buffDots[slot]:SetColorTexture(Theme.Hex(Theme.Colors.dashedEmpty))
-			end
+			dd:SetTint(value and CBAB.Blessings[value].color)
 		end
 
 		y = y - ROW_HEIGHT

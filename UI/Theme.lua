@@ -474,6 +474,91 @@ function Theme.CreateToggle(parent, opts)
 	return toggle
 end
 
+-- ============================================================
+-- Dropdown skin: hides a UIDropDownMenuTemplate frame's native combobox
+-- chrome (background end-caps + arrow button) and lays a Theme pill over it
+-- instead -- backdrop, optional leading dot, right-aligned chevron, full-
+-- pill click target. UI/RosterPage.lua's redesign originally left native
+-- dropdown chrome un-styled specifically to avoid retexturing it (README
+-- "without having to retexture native UIDropDownMenuTemplate chrome"); this
+-- hides rather than retextures, so the design's actual chip look (README §2
+-- "Assignment = blessing chip") is achievable without hand-rolling a whole
+-- custom dropdown widget. UIDropDownMenu_SetText/_Initialize/
+-- ToggleDropDownMenu all keep working unmodified on the underlying frame --
+-- only its own visual pieces are hidden, and OnMouseDown is wired up since
+-- the native arrow button (its usual click target) is now hidden.
+-- opts: width/height (pill size -- call AFTER any UIDropDownMenu_SetWidth,
+-- this overrides it), dot (boolean, a leading Theme.CreateDot).
+-- Returns the dot region (or nil) so callers who want it directly still can.
+-- ============================================================
+
+function Theme.SkinDropdown(dd, opts)
+	opts = opts or {}
+	local name = dd:GetName()
+	for _, part in ipairs({ "Left", "Middle", "Right", "Button", "Icon" }) do
+		local region = _G[name .. part]
+		if region then region:Hide() end
+	end
+
+	CBAB:ApplyBackdrop(dd, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	dd:SetHeight(opts.height or 22)
+	if opts.width then dd:SetWidth(opts.width) end
+
+	local dot
+	if opts.dot then
+		dot = Theme.CreateDot(dd, Theme.Colors.dashedEmpty, 8)
+		dot:SetPoint("LEFT", 10, 1)
+	end
+
+	local chevron = dd:CreateFontString(nil, "OVERLAY")
+	Theme.StyleText(chevron, "ColumnLabel", { color = "textFaint" })
+	chevron:SetText("v")
+	chevron:SetPoint("RIGHT", -8, 1)
+
+	local text = _G[name .. "Text"]
+	text:ClearAllPoints()
+	if dot then
+		text:SetPoint("LEFT", dot, "RIGHT", 6, 0)
+	else
+		text:SetPoint("LEFT", 10, 1)
+	end
+	text:SetPoint("RIGHT", chevron, "LEFT", -4, 0)
+	text:SetJustifyH("LEFT")
+	Theme.StyleText(text, "Body", {})
+	dd.themeText = text -- exposed for callers that want direct text-color control (e.g. class columns), bypassing SetTint's pill background
+
+	dd:EnableMouse(true)
+	dd:SetScript("OnMouseDown", function(self)
+		ToggleDropDownMenu(1, nil, self, self, 0, 0)
+	end)
+
+	-- Tints the pill to a blessing/class color (a Theme Colors-style hex
+	-- string, e.g. CBAB.Blessings[x].color), or resets to the neutral
+	-- fieldFill look when hex is nil. opts.plain skips the pill background
+	-- entirely (always transparent) -- for columns the mockup renders as
+	-- plain colored text with no chip (README §2 Tanks table's Class
+	-- column), where callers set dd.themeText's color directly instead.
+	function dd:SetTint(hex)
+		if opts.plain then
+			dd:SetBackdropColor(0, 0, 0, 0)
+			dd:SetBackdropBorderColor(0, 0, 0, 0)
+		elseif hex then
+			dd:SetBackdropColor(Theme.HexA(hex, 0.14))
+			dd:SetBackdropBorderColor(Theme.HexA(hex, 0.4))
+			if dot then dot:SetColorTexture(Theme.Hex(hex)) end
+			text:SetTextColor(Theme.MixHex(hex, 55, "#ffffff"))
+		else
+			dd:SetBackdropColor(Theme.Hex(Theme.Colors.fieldFill))
+			dd:SetBackdropBorderColor(Theme.Hex(Theme.Colors.borderControlAlt))
+			if dot then dot:SetColorTexture(Theme.Hex(Theme.Colors.dashedEmpty)) end
+			text:SetTextColor(Theme.C("textPrimary"))
+		end
+	end
+	dd:SetTint(nil)
+
+	return dot
+end
+
 -- Small solid-color square swatch (rounded dots aren't available without a
 -- circular texture asset -- see file header, no image assets ship with this
 -- addon) used as the "colored dot" the README pairs with blessing/class/
