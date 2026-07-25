@@ -695,22 +695,27 @@ end
 -- hover) -- see CBAB.Bar_ShowPopout further down -- so its class cells get
 -- their OWN OnEnter/OnLeave instead of attachTooltip's generic one.
 --
--- Positioning: these compat-named buttons ARE protected frames (inherited
--- from SecureActionButtonTemplate at creation, regardless of attributes),
--- but per Blizzard's own security model that only restricts SetPoint/
--- SetSize on them while InCombatLockdown() -- confirmed against
--- PallyPower's own source (AznamirWoW/PallyPower, UpdateLayout()), which
--- repositions these exact button names directly every layout pass, guarded
--- by nothing but the same InCombatLockdown() check refreshGridStructure()
--- already has (see pendingGridRefresh above). No wrapper frame needed, and
--- one was tried and reverted here -- SetAllPoints(wrapper) puts the wrapper
--- in the button's protected "anchor family," which propagates the same
--- restriction onto the wrapper's own SetPoint calls, so it didn't help.
+-- Positioning: these compat-named buttons are protected frames (inherited
+-- from SecureActionButtonTemplate). Confirmed LIVE (InCombatLockdown()
+-- printed false at the moment of failure) that plain SetPoint on them still
+-- throws "Cannot anchor protected frames to regions" on this client even
+-- outside combat -- so the InCombatLockdown() guard above, while still
+-- correct and worth keeping, isn't sufficient by itself here. The one
+-- concrete remaining difference from PallyPower's own working buttons
+-- (AznamirWoW/PallyPower, CreateLayout()): theirs additionally inherit
+-- SecureHandlerShowHideTemplate/SecureHandlerEnterLeaveTemplate/
+-- SecureHandlerStateTemplate alongside SecureActionButtonTemplate. No
+-- secure-handler snippets are written against them here -- this is purely
+-- an attempt to match that template composition and see if it changes this
+-- client's repositioning behavior. refreshGridStructure()'s per-cell
+-- SetPoint/SetSize also goes through safeReposition()'s pcall regardless,
+-- so a cell that still can't move fails visually, not fatally.
 -- ============================================================
 
 local classButtons = {}
 for i = 1, 9 do
-	local btn = CreateFrame("Button", "PallyPowerC" .. i, bar, "SecureActionButtonTemplate")
+	local btn = CreateFrame("Button", "PallyPowerC" .. i, bar,
+		"SecureHandlerShowHideTemplate, SecureHandlerEnterLeaveTemplate, SecureHandlerStateTemplate, SecureActionButtonTemplate")
 	btn:RegisterForClicks("AnyDown")
 
 	btn.icon = btn:CreateTexture(nil, "ARTWORK")
