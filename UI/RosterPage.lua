@@ -729,21 +729,25 @@ local function createTankRow(index)
 	-- (Theme.SkinDropdown's opts.plain) -- still a real dropdown underneath
 	-- (functionally required here; the mockup's read-only text assumes the
 	-- class comes from the Paladins table, which doesn't apply to a
-	-- separately-curated tank roster). Buff columns ARE chips, one dot each.
+	-- separately-curated tank roster). Buff columns ARE chips, but no dot
+	-- (opts.compact, dot=false) -- at this table's 70px column pitch, a dot
+	-- alongside the usual margins left ~20px for text and every blessing
+	-- name truncated to "..."; the chip's own tinted background already
+	-- carries the color cue this column needs without one.
 	row.classDropdown = CreateFrame("Frame", "CBABuffRosterTankClassDD" .. index, row, "UIDropDownMenuTemplate")
 	-- Fixed x (shared with the header, above) instead of chaining relative
 	-- offsets, so headers and dropdowns stay aligned regardless of the
 	-- template's internal padding.
 	row.classDropdown:SetPoint("LEFT", TANK_CLASS_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.classDropdown, TANK_CLASS_DD_WIDTH)
-	Theme.SkinDropdown(row.classDropdown, { width = TANK_CLASS_DD_WIDTH + 10, plain = true })
+	Theme.SkinDropdown(row.classDropdown, { width = TANK_CLASS_DD_WIDTH + 10, plain = true, compact = true })
 
 	row.buffDropdowns = {}
 	for slot = 1, 4 do
 		local dd = CreateFrame("Frame", ("CBABuffRosterTankBuffDD%d_%d"):format(index, slot), row, "UIDropDownMenuTemplate")
 		dd:SetPoint("LEFT", TANK_BUFF_DOT_X[slot], 0)
 		UIDropDownMenu_SetWidth(dd, TANK_BUFF_DD_WIDTH)
-		Theme.SkinDropdown(dd, { width = TANK_BUFF_DD_WIDTH + 14, dot = true })
+		Theme.SkinDropdown(dd, { width = 66, compact = true })
 		row.buffDropdowns[slot] = dd
 	end
 

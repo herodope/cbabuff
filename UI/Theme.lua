@@ -504,25 +504,33 @@ function Theme.SkinDropdown(dd, opts)
 	dd:SetHeight(opts.height or 22)
 	if opts.width then dd:SetWidth(opts.width) end
 
+	-- opts.compact tightens every margin below for narrow columns (e.g.
+	-- RosterPage.lua's 4-wide tank-buff row) where the normal margins left
+	-- almost no room for text and everything truncated to "...".
+	local edgeMargin = opts.compact and 6 or 10
+	local textGap = opts.compact and 4 or 6
+	local chevronMargin = opts.compact and -6 or -8
+	local textChevronGap = opts.compact and -2 or -4
+
 	local dot
 	if opts.dot then
 		dot = Theme.CreateDot(dd, Theme.Colors.dashedEmpty, 8)
-		dot:SetPoint("LEFT", 10, 1)
+		dot:SetPoint("LEFT", edgeMargin, 1)
 	end
 
 	local chevron = dd:CreateFontString(nil, "OVERLAY")
 	Theme.StyleText(chevron, "ColumnLabel", { color = "textFaint" })
 	chevron:SetText("v")
-	chevron:SetPoint("RIGHT", -8, 1)
+	chevron:SetPoint("RIGHT", chevronMargin, 1)
 
 	local text = _G[name .. "Text"]
 	text:ClearAllPoints()
 	if dot then
-		text:SetPoint("LEFT", dot, "RIGHT", 6, 0)
+		text:SetPoint("LEFT", dot, "RIGHT", textGap, 0)
 	else
-		text:SetPoint("LEFT", 10, 1)
+		text:SetPoint("LEFT", edgeMargin, 1)
 	end
-	text:SetPoint("RIGHT", chevron, "LEFT", -4, 0)
+	text:SetPoint("RIGHT", chevron, "LEFT", textChevronGap, 0)
 	text:SetJustifyH("LEFT")
 	Theme.StyleText(text, "Body", {})
 	dd.themeText = text -- exposed for callers that want direct text-color control (e.g. class columns), bypassing SetTint's pill background
