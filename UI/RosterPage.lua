@@ -532,6 +532,52 @@ local function applyRowCard(row)
 	Theme.ApplyHoverHighlight(row, { hoverAlpha = 0.05, pressAlpha = 0.02 })
 end
 
+-- README §2 "Tank = blue pill ... text #7cc0ef, or --": a compact click
+-- toggle, not the stock UICheckButtonTemplate tick mark. Exposes
+-- SetChecked/GetChecked so callers (refreshAll, bindPaladinRow's commit,
+-- the roster-save read in doSolvePlan) don't need to know it isn't a real
+-- CheckButton. Kept narrow (28px) to fit the 34px Tank column.
+local function createTankToggle(parent)
+	local btn = CreateFrame("Button", nil, parent)
+	btn:SetSize(28, 18)
+	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	local label = btn:CreateFontString(nil, "OVERLAY")
+	label:SetPoint("CENTER")
+	btn.label = label
+	btn.checked = false
+
+	local function apply()
+		if btn.checked then
+			btn:SetBackdropColor(Theme.HexA(Theme.Colors.blue, 0.14))
+			btn:SetBackdropBorderColor(Theme.HexA(Theme.Colors.blue, 0.4))
+			Theme.StyleText(label, "ColumnLabel", { color = "blue" })
+			label:SetText("TANK")
+		else
+			btn:SetBackdropColor(0, 0, 0, 0)
+			btn:SetBackdropBorderColor(0, 0, 0, 0)
+			Theme.StyleText(label, "ColumnLabel", { color = "textFaint" })
+			label:SetText("--")
+		end
+	end
+
+	function btn:SetChecked(checked)
+		self.checked = checked and true or false
+		apply()
+	end
+	function btn:GetChecked()
+		return self.checked
+	end
+	-- Toggling and the caller's commit are two separate scripts (HookScript,
+	-- not SetScript) so bindPaladinRow's SetScript("OnClick", commit) below
+	-- can't clobber this -- both need to fire, toggle first so commit's
+	-- GetChecked() read sees the new state.
+	btn:SetScript("OnClick", function(self)
+		self:SetChecked(not self.checked)
+	end)
+	apply()
+	return btn
+end
+
 local function createPaladinRow(index)
 	local row = CreateFrame("Frame", nil, content)
 	row:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
@@ -549,8 +595,7 @@ local function createPaladinRow(index)
 	row.deleteButton:SetSize(DELETE_SIZE, DELETE_SIZE)
 	row.deleteButton:SetPoint("LEFT", row.nameBox, "RIGHT", 2, 0)
 
-	row.tank = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
-	row.tank:SetSize(18, 18)
+	row.tank = createTankToggle(row)
 	row.tank:SetPoint("LEFT", PAL_TANK_X, 0)
 
 	row.specBox = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
@@ -592,7 +637,7 @@ local function bindPaladinRow(row)
 	row.nameBox:SetScript("OnEnterPressed", function(self) commit() self:ClearFocus() end)
 	row.nameBox:SetScript("OnEditFocusLost", commit)
 	row.specBox:SetScript("OnEditFocusLost", commit)
-	row.tank:SetScript("OnClick", commit)
+	row.tank:HookScript("OnClick", commit)
 
 	UIDropDownMenu_Initialize(row.assignDropdown, function(self, level)
 		local autoInfo = UIDropDownMenu_CreateInfo()
