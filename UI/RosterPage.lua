@@ -76,19 +76,22 @@ local DELETE_SIZE = 22 -- red X delete button, sits right after each name
 -- for dropdown columns are offset by this so the label sits over the text.
 local DD_TEXT_INSET = 18
 
--- Paladin row x-layout. Assign/Aura each get a small color-coded dot placed
--- just before the dropdown, sized to leave a 4px gap on both sides, so "the
--- color system reads even at a glance" (README, Icons) without having to
--- retexture the native dropdown chrome itself (see file header, Fidelity).
+-- Paladin row x-layout. Assign/Aura are Theme.SkinDropdown pills with their
+-- dot built in (see createPaladinRow) -- one anchor per column now, not a
+-- separate external dot + dropdown pair. PAL_TANK_WIDTH accounts for the
+-- Tank toggle's own "Tank"/"-" label (createTankToggle): the old 28px
+-- button had ~0 padding around that text, reading as almost no gap before
+-- Spec.
 local PAL_NAME_X = 6
 local PAL_TANK_X = 150
-local PAL_SPEC_X = 182
-local PAL_ASSIGN_DOT_X = 244
-local PAL_ASSIGN_X = 254
-local PAL_ASSIGN_WIDTH = 90
-local PAL_AURA_DOT_X = PAL_ASSIGN_X + PAL_ASSIGN_WIDTH + 4
-local PAL_AURA_X = PAL_AURA_DOT_X + 10
-local PAL_AURA_WIDTH = 70
+local PAL_TANK_WIDTH = 40
+local PAL_SPEC_X = PAL_TANK_X + PAL_TANK_WIDTH + 10
+local PAL_ASSIGN_DOT_X = PAL_SPEC_X + 68
+local PAL_ASSIGN_X = PAL_ASSIGN_DOT_X
+local PAL_ASSIGN_WIDTH = 100
+local PAL_AURA_DOT_X = PAL_ASSIGN_DOT_X + PAL_ASSIGN_WIDTH + 4
+local PAL_AURA_X = PAL_AURA_DOT_X
+local PAL_AURA_WIDTH = 76
 
 -- Tank row x-layout: same color-dot treatment for the class column and
 -- each of the four buff-priority columns.
@@ -485,7 +488,7 @@ local paladinHeader = createSeparator(
 )
 local paladinColHeader = createColumnHeader({
 	{ text = "Name", x = PAL_NAME_X, width = 110 },
-	{ text = "Tank", x = PAL_TANK_X, width = 34 },
+	{ text = "Tank", x = PAL_TANK_X, width = PAL_TANK_WIDTH },
 	{ text = "Spec (opt.)", x = PAL_SPEC_X, width = 62 },
 	{ text = "Assign", x = PAL_ASSIGN_X + DD_TEXT_INSET, width = 90 },
 	-- Aura is manual-only (no solver slot construction, see SPEC.md's v1
@@ -536,10 +539,11 @@ end
 -- toggle, not the stock UICheckButtonTemplate tick mark. Exposes
 -- SetChecked/GetChecked so callers (refreshAll, bindPaladinRow's commit,
 -- the roster-save read in doSolvePlan) don't need to know it isn't a real
--- CheckButton. Kept narrow (28px) to fit the 34px Tank column.
+-- CheckButton. Sized to PAL_TANK_WIDTH so the "Tank"/"-" label has real
+-- padding instead of running edge-to-edge into the Spec column next to it.
 local function createTankToggle(parent)
 	local btn = CreateFrame("Button", nil, parent)
-	btn:SetSize(28, 18)
+	btn:SetSize(PAL_TANK_WIDTH, 18)
 	CBAB:ApplyBackdrop(btn, { edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
 	local label = btn:CreateFontString(nil, "OVERLAY")
 	label:SetPoint("CENTER")
@@ -613,13 +617,13 @@ local function createPaladinRow(index)
 	row.assignDropdown = CreateFrame("Frame", "CBABuffRosterPalAssignDD" .. index, row, "UIDropDownMenuTemplate")
 	row.assignDropdown:SetPoint("LEFT", PAL_ASSIGN_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.assignDropdown, PAL_ASSIGN_WIDTH)
-	Theme.SkinDropdown(row.assignDropdown, { width = 100, dot = true })
+	Theme.SkinDropdown(row.assignDropdown, { width = PAL_ASSIGN_WIDTH, dot = true })
 
 	-- Aura chip has no dot in the mockup (plain dark pill, text + v only).
 	row.auraDropdown = CreateFrame("Frame", "CBABuffRosterPalAuraDD" .. index, row, "UIDropDownMenuTemplate")
 	row.auraDropdown:SetPoint("LEFT", PAL_AURA_DOT_X, 0)
 	UIDropDownMenu_SetWidth(row.auraDropdown, PAL_AURA_WIDTH)
-	Theme.SkinDropdown(row.auraDropdown, { width = 76 })
+	Theme.SkinDropdown(row.auraDropdown, { width = PAL_AURA_WIDTH })
 
 	row.warningText = row:CreateFontString(nil, "OVERLAY")
 	Theme.StyleText(row.warningText, "Body", { color = "redText" })
