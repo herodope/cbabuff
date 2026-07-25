@@ -253,13 +253,13 @@ Theme.StyleText(profileLabel, "ColumnLabel", { color = "textFaint" })
 profileLabel:SetPoint("LEFT", 0, 0)
 profileLabel:SetText("PROFILE")
 
--- Native UIDropDownMenuTemplate chrome is left un-retextured (same posture
--- as UI/Bar.lua's gridEditDropdown) -- the handoff's "selector pill" look
--- doesn't have a cheap backdrop-based equivalent for a menu that also needs
--- Blizzard's own click-open-highlight behavior.
+-- README §2 profile toolbar "selector pill Default 25m v": Theme.SkinDropdown
+-- (see UI/Theme.lua) hides the native chrome and lays the pill over it, same
+-- as every dropdown in the Paladins/Tanks tables below.
 local profileDropdown = CreateFrame("Frame", "CBABuffRosterProfileDropdown", toolbar, "UIDropDownMenuTemplate")
 profileDropdown:SetPoint("LEFT", profileLabel, "RIGHT", -2, -2)
 UIDropDownMenu_SetWidth(profileDropdown, 140)
+Theme.SkinDropdown(profileDropdown, { width = 150 })
 
 local profileNameBox = CreateFrame("EditBox", nil, toolbar, "InputBoxTemplate")
 profileNameBox:SetSize(110, 20)
