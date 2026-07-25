@@ -255,7 +255,13 @@ Theme.Fonts.ContentTitle = Theme.Fonts.ContentTitle or CreateFont("CBABuffFontCo
 do
 	local font = Theme.Fonts.ContentTitle
 	local FONT_DIR = "Interface\\AddOns\\" .. ADDON .. "\\Fonts\\"
-	local ok = font:SetFont(FONT_DIR .. "Rajdhani-Bold.ttf", 22, "")
+	-- SetFont() throws on this client for a missing font file rather than
+	-- returning false (see UI/Theme.lua's buildFont for the same fix) --
+	-- fatal here since it would abort the rest of this file's main chunk,
+	-- including CBAB.Config:Show() and its event registrations, before they
+	-- ever get defined.
+	local pcallOk, setFontOk = pcall(font.SetFont, font, FONT_DIR .. "Rajdhani-Bold.ttf", 22, "")
+	local ok = pcallOk and setFontOk
 	if not ok then
 		font:CopyFontObject(GameFontNormalLarge)
 		local path, _, flags = font:GetFont()

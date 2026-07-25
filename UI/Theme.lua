@@ -151,7 +151,17 @@ local FONT_DIR = "Interface\\AddOns\\" .. ADDON .. "\\Fonts\\"
 
 local function buildFont(name, file, size, flags, fallbackObjectName)
 	local font = CreateFont("CBABuffFont" .. name)
-	local ok = file and font:SetFont(FONT_DIR .. file, size, flags or "")
+	-- SetFont() is documented to return false on a missing/bad file, but on
+	-- this client it instead throws a real Lua error ("Invalid font asset
+	-- ... file not found") -- fatal here since it would otherwise abort the
+	-- rest of this file's main chunk (everything defined below this point,
+	-- e.g. Theme.ApplyFill) before it ever runs. pcall makes a thrown error
+	-- degrade to the same fallback path as a plain `false` return.
+	local pcallOk, setFontOk = false, false
+	if file then
+		pcallOk, setFontOk = pcall(font.SetFont, font, FONT_DIR .. file, size, flags or "")
+	end
+	local ok = pcallOk and setFontOk
 	if not ok then
 		local fallback = _G[fallbackObjectName] or GameFontNormal
 		font:CopyFontObject(fallback)
