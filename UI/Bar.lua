@@ -1604,12 +1604,16 @@ local function applySavedPosition()
 	bar:ClearAllPoints()
 	bar:SetPoint(ui.point or "CENTER", UIParent, ui.point or "CENTER", ui.x or 0, ui.y or -180)
 	bar:SetScale(ui.scale or 1.0)
-	-- Full refresh immediately at ADDON_LOADED rather than waiting for the
-	-- first ROSTER_CHANGED, so the bar's chrome is visible even before any
-	-- group exists.
-	refreshGridStructure()
-	refreshAssignment()
-	refreshVisualState()
+	-- Structure/assignment/visual population is left to the "bar:roster"
+	-- ROSTER_CHANGED handler below -- Roster.lua's own PLAYER_ENTERING_WORLD
+	-- rebuild guarantees that fires right after ADDON_LOADED, even solo.
+	-- Running the same three refreshes here too used to race that:
+	-- CBAB.Roster's cache is still empty at ADDON_LOADED, so
+	-- computeClassLayout() came back with zero columns (every class cell
+	-- hidden) while paladinRowNames() still pulled a full row list from the
+	-- already-loaded saved assignment -- a big box sized for many rows with
+	-- every class cell hidden, briefly but visibly, until the real refresh
+	-- landed a moment later.
 	CBAB.Bar_SetShown(ui.shown ~= false)
 end
 
