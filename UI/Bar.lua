@@ -668,12 +668,7 @@ end
 -- compat is scoped to the C1-C9 set only (spec 11.2).
 local function createCell(parent, kind)
 	cellSerial = cellSerial + 1
-	-- Positioned via btn.posFrame, not the button itself -- see the
-	-- comment above classButtons' creation loop below for why.
-	local posFrame = CreateFrame("Frame", nil, parent)
-	local btn = CreateFrame("Button", "CBABuffGridCell" .. cellSerial, posFrame, "SecureActionButtonTemplate")
-	btn:SetAllPoints(posFrame)
-	btn.posFrame = posFrame
+	local btn = CreateFrame("Button", "CBABuffGridCell" .. cellSerial, parent, "SecureActionButtonTemplate")
 	btn:RegisterForClicks("AnyDown")
 	btn.icon = btn:CreateTexture(nil, "ARTWORK")
 	btn.icon:SetPoint("TOPLEFT", 3, -3)
@@ -700,25 +695,22 @@ end
 -- hover) -- see CBAB.Bar_ShowPopout further down -- so its class cells get
 -- their OWN OnEnter/OnLeave instead of attachTooltip's generic one.
 --
--- Positioning: once refreshAssignment() binds this addon's own secure
--- attributes (type1/macrotext1/etc, spec 11.2's live macro casting) onto
--- one of these reserved PallyPowerC# names, WoW permanently treats it as a
--- protected frame -- SetPoint on it from insecure code fails from then on
--- ("Cannot anchor protected frames to regions"), combat or not, forever for
--- the rest of the session, confirmed live via /cbab pbar well outside
--- combat. So the button itself is never repositioned again after creation:
--- it's parented to an ordinary (unprotected) posFrame and SetAllPoints'd to
--- it ONCE, right here, before any attribute is ever set. Every later layout
--- pass moves/resizes posFrame instead -- see refreshGridStructure's per-
--- cell loop -- and the button visually follows for free.
+-- Positioning: these compat-named buttons ARE protected frames (inherited
+-- from SecureActionButtonTemplate at creation, regardless of attributes),
+-- but per Blizzard's own security model that only restricts SetPoint/
+-- SetSize on them while InCombatLockdown() -- confirmed against
+-- PallyPower's own source (AznamirWoW/PallyPower, UpdateLayout()), which
+-- repositions these exact button names directly every layout pass, guarded
+-- by nothing but the same InCombatLockdown() check refreshGridStructure()
+-- already has (see pendingGridRefresh above). No wrapper frame needed, and
+-- one was tried and reverted here -- SetAllPoints(wrapper) puts the wrapper
+-- in the button's protected "anchor family," which propagates the same
+-- restriction onto the wrapper's own SetPoint calls, so it didn't help.
 -- ============================================================
 
 local classButtons = {}
 for i = 1, 9 do
-	local posFrame = CreateFrame("Frame", nil, bar)
-	local btn = CreateFrame("Button", "PallyPowerC" .. i, posFrame, "SecureActionButtonTemplate")
-	btn:SetAllPoints(posFrame)
-	btn.posFrame = posFrame
+	local btn = CreateFrame("Button", "PallyPowerC" .. i, bar, "SecureActionButtonTemplate")
 	btn:RegisterForClicks("AnyDown")
 
 	btn.icon = btn:CreateTexture(nil, "ARTWORK")
@@ -1448,13 +1440,11 @@ refreshGridStructure = function()
 
 		for slot = 1, 9 do
 			local cell = row.cells[slot]
-			-- Repositioned/resized via cell.posFrame, never the button itself --
-			-- see the comment above classButtons' creation loop.
-			cell.posFrame:ClearAllPoints()
+			cell:ClearAllPoints()
 			if currentLayout[slot] then
 				cell.class = currentLayout[slot]
-				cell.posFrame:SetSize(tileSize, tileSize)
-				cell.posFrame:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + columnX[slot], cellY)
+				cell:SetSize(tileSize, tileSize)
+				cell:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + columnX[slot], cellY)
 				cell:Show()
 			else
 				cell.class = nil
@@ -1462,18 +1452,18 @@ refreshGridStructure = function()
 			end
 		end
 
-		row.cells.pets.posFrame:ClearAllPoints()
-		row.cells.pets.posFrame:SetSize(tileSize, tileSize)
+		row.cells.pets:ClearAllPoints()
+		row.cells.pets:SetSize(tileSize, tileSize)
 		if showPets then
-			row.cells.pets.posFrame:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + petsX, cellY)
+			row.cells.pets:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + petsX, cellY)
 			row.cells.pets:Show()
 		else
 			row.cells.pets:Hide()
 		end
 
-		row.cells.aura.posFrame:ClearAllPoints()
-		row.cells.aura.posFrame:SetSize(tileSize, tileSize)
-		row.cells.aura.posFrame:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + auraX, cellY)
+		row.cells.aura:ClearAllPoints()
+		row.cells.aura:SetSize(tileSize, tileSize)
+		row.cells.aura:SetPoint("TOPLEFT", gridAnchor, "TOPLEFT", nameColOffset + auraX, cellY)
 		row.cells.aura:Show()
 
 		-- Non-self rows in the expanded view read as coverage only --
